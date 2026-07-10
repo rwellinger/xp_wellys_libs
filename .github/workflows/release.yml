@@ -1,0 +1,77 @@
+name: Build & Release bundle
+
+on:
+  # Tag push cuts a release; main push / manual dispatch build + smoke-test
+  # only (no release), so the bundle is proven before it is ever published.
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  build:
+    runs-on: macos-15 # arm64, matches the plugin's release runner + toolchain
+    timeout-minutes: 90 # cold compile of whisper/llama/ggml/Piper/espeak
+    permissions:
+      contents: write # create the release on tags
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install toolchain (Homebrew LLVM, Ninja, ccache)
+        # Homebrew LLVM at /opt/homebrew/opt/llvm is what CMakeLists auto-pins
+        # so the static archives match the plugin's libc++ ABI.
+        run: brew install llvm ninja ccache
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: ${{ runner.os }}-arm64-libs
+          max-size: 2500M
+          variant: ccache
+
+      - name: Build bundle
+        run: make build
+
+      - name: Smoke-test — link the bundle exactly as the plugin will
+        run: |
+          set -euo pipefail
+          BUNDLE="$PWD/build/bundle"
+          cmake -S smoke -B build/smoke -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
+            -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
+            -DXP_WELLYS_LIBS_ROOT="$BUNDLE" \
+            -Wno-dev
+          cmake --build build/smoke
+          # libpiper + onnxruntime resolve via @loader_path next to the binary.
+          cp build/bundle/lib/libpiper.dylib \
+             build/bundle/lib/libonnxruntime.1.22.0.dylib \
+             build/bundle/lib/libonnxruntime.dylib build/smoke/ 2>/dev/null || true
+          ./build/smoke/link_test
+          ccache --show-stats
+
+      - name: Package tarball
+        run: make tarball
+
+      - name: Show manifest
+        run: cat build/bundle/manifest.txt
+
+      - name: Upload build artifact (every run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: xp_wellys_libs-arm64-macos
+          path: xp_wellys_libs-arm64-macos-*.tar.gz
+          if-no-files-found: error
+
+      - name: Create release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: xp_wellys_libs-arm64-macos-*.tar.gz
+          generate_release_notes: true

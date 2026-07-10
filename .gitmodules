@@ -1,0 +1,14 @@
+# HTTPS URLs so CI clones without an SSH key. The plugin repo uses git@ +
+# a rewrite step; a fresh repo is simpler with https directly. Pins are set
+# by the checked-out commit of each path (see DESIGN.md).
+[submodule "third_party/whisper.cpp"]
+	path = third_party/whisper.cpp
+	url = https://github.com/ggerganov/whisper.cpp.git
+	branch = master
+[submodule "third_party/llama.cpp"]
+	path = third_party/llama.cpp
+	url = https://github.com/ggerganov/llama.cpp.git
+	branch = master
+[submodule "third_party/piper1-gpl"]
+	path = third_party/piper1-gpl
+	url = https://github.com/OHF-Voice/piper1-gpl.git
