@@ -1,15 +1,13 @@
 cmake_minimum_required(VERSION 3.26)
 
-# ── Toolchain pin ────────────────────────────────────────────────────────────
-# Static .a archives are ABI-sensitive: they MUST be produced with the same
-# libc++ the plugin links against. The plugin uses Homebrew LLVM, so pin it
-# here too when present and not already overridden on the command line. This
-# must run BEFORE project() to take effect.
-if(NOT CMAKE_CXX_COMPILER AND EXISTS "/opt/homebrew/opt/llvm/bin/clang++")
-    set(CMAKE_C_COMPILER   "/opt/homebrew/opt/llvm/bin/clang"   CACHE FILEPATH "")
-    set(CMAKE_CXX_COMPILER "/opt/homebrew/opt/llvm/bin/clang++" CACHE FILEPATH "")
-endif()
-
+# ── Toolchain ────────────────────────────────────────────────────────────────
+# Use the DEFAULT compiler (Apple clang from the active Xcode), exactly like
+# the plugin's own build — its Makefile sets no CMAKE_*_COMPILER. Static .a
+# archives are ABI-sensitive, so matching the plugin's compiler matters, and
+# Apple clang IS what the plugin uses. It is also the only clang that compiles
+# Apple's SDK headers cleanly: Homebrew LLVM's newer clang errors on them
+# (-Welaborated-enum-base in vDSP.h / CoreFoundation). CLAUDE.md's "Homebrew
+# LLVM" note refers to clang-format / clang-tidy tooling, not the compiler.
 project(xp_wellys_libs C CXX)
 
 set(CMAKE_CXX_STANDARD 17)

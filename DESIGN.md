@@ -68,10 +68,14 @@ first so its pinned `ggml` target wins; whisper.cpp reuses it; Piper last).
 A `bundle` custom target copies each `$<TARGET_FILE:...>` plus the headers
 and espeak-ng-data into `build/bundle/`, then writes `manifest.txt`.
 
-Toolchain is pinned to **Homebrew LLVM** + deployment target **13.3**,
-identical to the plugin — static `.a` archives are ABI-sensitive, so both
-repos must compile with the same libc++. CI runs on `macos-15` (arm64), the
-same runner generation the plugin is released from.
+Toolchain is the **default Apple clang** (from the active Xcode) + deployment
+target **13.3**, identical to the plugin — its Makefile sets no
+`CMAKE_*_COMPILER`, so it builds with Apple clang too. Static `.a` archives
+are ABI-sensitive, so matching the plugin's compiler matters; Apple clang is
+also the only clang that compiles Apple's SDK headers cleanly (Homebrew LLVM's
+newer clang errors with `-Welaborated-enum-base` in vDSP.h / CoreFoundation).
+CI runs on `macos-15` (arm64), the same runner generation the plugin is
+released from.
 
 ## Consumption (main repo)
 

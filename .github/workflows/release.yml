@@ -23,10 +23,11 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install toolchain (Homebrew LLVM, Ninja, ccache)
-        # Homebrew LLVM at /opt/homebrew/opt/llvm is what CMakeLists auto-pins
-        # so the static archives match the plugin's libc++ ABI.
-        run: brew install llvm ninja ccache
+      - name: Install build tools (Ninja, ccache)
+        # No LLVM: the build uses the runner's default Apple clang, exactly
+        # like the plugin (Apple clang is the ABI match AND the only clang that
+        # compiles Apple's SDK headers without -Welaborated-enum-base errors).
+        run: brew install ninja ccache
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2.23
@@ -44,8 +45,6 @@ jobs:
           BUNDLE="$PWD/build/bundle"
           cmake -S smoke -B build/smoke -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
-            -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
             -DXP_WELLYS_LIBS_ROOT="$BUNDLE" \
             -Wno-dev
           cmake --build build/smoke
