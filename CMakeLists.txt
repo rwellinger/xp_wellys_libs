@@ -74,8 +74,11 @@ set(BUNDLE "${CMAKE_BINARY_DIR}/bundle")
 
 # Every static/shared target we might have built. Guarded by if(TARGET) so an
 # upstream rename (e.g. ggml-blas absent because GGML_BLAS=OFF) is harmless.
+# Modern llama.cpp splits the common helper into `llama-common` +
+# `llama-common-base`; older pins used a single `common`. All guarded by
+# if(TARGET), so whichever set exists is staged.
 set(_bundle_targets
-    whisper llama common llama-common
+    whisper llama llama-common llama-common-base common
     ggml ggml-base ggml-cpu ggml-metal ggml-blas
     piper)
 

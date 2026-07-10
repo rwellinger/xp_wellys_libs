@@ -36,8 +36,9 @@ target_include_directories(xp_wellys_libs::inference INTERFACE
 # @loader_path, then the Apple frameworks ggml-metal / Accelerate pull in.
 target_link_libraries(xp_wellys_libs::inference INTERFACE
     "${_xwl_lib}/libwhisper.a"
+    "${_xwl_lib}/libllama-common.a"
+    "${_xwl_lib}/libllama-common-base.a"
     "${_xwl_lib}/libllama.a"
-    "${_xwl_lib}/libcommon.a"
     "${_xwl_lib}/libggml-metal.a"
     "${_xwl_lib}/libggml-cpu.a"
     "${_xwl_lib}/libggml-base.a"

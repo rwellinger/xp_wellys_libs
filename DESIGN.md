@@ -31,7 +31,8 @@ artifact — there is nothing local to build for those targets.
 lib/
   libwhisper.a
   libllama.a
-  libcommon.a            # llama.cpp's "llama-common" helper
+  libllama-common.a      # llama.cpp's common helper
+  libllama-common-base.a # split out of common in recent llama.cpp
   libggml.a              # umbrella
   libggml-base.a
   libggml-cpu.a
@@ -97,7 +98,7 @@ released from.
 The static libs must be handed to `ld` in dependency order:
 
 ```
-whisper  llama  common  ggml-metal  ggml-cpu  ggml-base  ggml
+whisper  llama-common  llama-common-base  llama  ggml-metal  ggml-cpu  ggml-base  ggml
 + frameworks: Metal MetalKit Foundation Accelerate
 + libpiper.dylib (self-contained)  libonnxruntime.1.22.0.dylib
 ```
