@@ -19,21 +19,25 @@ release build becomes deterministic ~5–8 min, cold or warm.
 
 Local **STT/LM** (whisper.cpp + llama.cpp, Metal-accelerated) is
 **Apple-Silicon-only**. Local **TTS** (Piper) is pure CPU (onnxruntime +
-espeak-ng, no Metal), so it is portable to Intel Macs and Windows — the plugin's
-hybrid mode (cloud STT/LM + local German Piper voice, plugin issue #69) needs it
-on those slices too. So this repo produces two bundle kinds:
+espeak-ng, no Metal), so it is portable off Apple Silicon — the plugin's hybrid
+mode (cloud STT/LM + local German Piper voice, plugin issue #69) needs it on
+those slices too. So this repo produces two bundle kinds:
 
 | Bundle | Contents | Consumer target | Built by |
 |---|---|---|---|
 | `arm64-macos` (full) | whisper + llama + ggml/Metal + Piper | `xp_wellys_libs::inference` (+ `::piper`) | `macos-15` (arm64) |
-| `x86_64-macos` (tts-only) | Piper + onnxruntime + espeak-ng-data | `xp_wellys_libs::piper` | `macos-13` (Intel) |
+| `win-x64` (tts-only) | Piper + onnxruntime + espeak-ng-data | `xp_wellys_libs::piper` | `windows-latest` — **planned, plugin #73/#74** |
 
 The Piper-only bundle is selected with `-DXPWELLYS_LIBS_TTS_ONLY=ON`; it skips
-whisper/llama/ggml/Metal entirely. Piper picks its onnxruntime arch from
-`CMAKE_SYSTEM_PROCESSOR`, so the x86_64 bundle is built on a **native Intel**
-process (CI's `macos-13` runner; locally only under an x86_64 cmake) — a plain
-cross `-arch` flag is not enough. A Windows Piper-only bundle is the next step
-(plugin issues #73/#74).
+whisper/llama/ggml/Metal entirely.
+
+**Dropped: x86_64-macOS.** A Piper-only Intel-Mac bundle was implemented (plugin
+#71) but cannot be produced in CI — GitHub retired the Intel `macos-13` runners
+(a 2h+ queue that never allocates), and Piper picks its onnxruntime arch from
+`CMAKE_SYSTEM_PROCESSOR`, so cross-building on an arm64 runner would need patching
+the pinned espeak-ng submodule's ExternalProject. Intel Macs are a shrinking
+niche with **no regression** (they keep cloud TTS). The `XPWELLYS_LIBS_TTS_ONLY`
+option + `::piper` target stay — the Windows bundle reuses exactly this machinery.
 
 ## What the bundle contains
 

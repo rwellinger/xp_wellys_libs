@@ -29,15 +29,14 @@ jobs:
             tarball_cmd: make tarball
             smoke_root: build/bundle
             artifact: xp_wellys_libs-arm64-macos
-          # Piper-only x86_64 bundle (issue #71): libpiper + onnxruntime +
-          # espeak-ng-data, no whisper/llama/Metal. Built natively on an Intel
-          # runner so Piper picks the x86_64 onnxruntime.
-          - arch: x86_64
-            runner: macos-13
-            build_cmd: make bundle-tts-x86_64
-            tarball_cmd: make tarball-tts-x86_64
-            smoke_root: build-tts-x86_64/bundle
-            artifact: xp_wellys_libs-x86_64-macos
+          # NOTE: the x86_64-macOS Piper-only bundle (plugin #71/#72) was
+          # dropped — GitHub retired the Intel `macos-13` runners, so it can no
+          # longer be built in CI (a 2h+ queue that never allocates), and
+          # cross-building on an arm64 runner would require patching the pinned
+          # espeak-ng submodule. Intel Macs are a shrinking niche with no
+          # regression (they keep cloud TTS). The XPWELLYS_LIBS_TTS_ONLY option
+          # + xp_wellys_libs::piper target stay — the Windows Piper-only bundle
+          # (plugin #73/#74) reuses exactly that machinery on windows-latest.
     steps:
       - uses: actions/checkout@v5
         with:

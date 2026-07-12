@@ -4,7 +4,7 @@
 # Two bundle kinds ship from this repo:
 #   * full     (arm64-macos): whisper + llama + ggml/Metal + Piper. Defines
 #                both xp_wellys_libs::inference AND xp_wellys_libs::piper.
-#   * tts-only (x86_64-macos, win-x64): Piper + onnxruntime only. Defines
+#   * tts-only (win-x64, planned #73/#74): Piper + onnxruntime only. Defines
 #                xp_wellys_libs::piper. No whisper/llama/Metal.
 #
 # Usage (plugin repo):
