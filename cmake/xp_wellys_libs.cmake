@@ -27,21 +27,34 @@ endif()
 set(_xwl_lib "${XP_WELLYS_LIBS_ROOT}/lib")
 set(_xwl_inc "${XP_WELLYS_LIBS_ROOT}/include")
 
-if(NOT EXISTS "${_xwl_lib}/libpiper.dylib")
+# The Piper artefact differs by platform: a self-contained dylib on macOS, a
+# DLL + import .lib on Windows. Pick the linkable file (the one the consumer
+# links against) and use it both for the completeness check and the target.
+if(WIN32)
+    set(_xwl_piper_link "${_xwl_lib}/piper.lib")
+    set(_xwl_onnx_link  "${_xwl_lib}/onnxruntime.lib")
+else()
+    set(_xwl_piper_link "${_xwl_lib}/libpiper.dylib")
+    set(_xwl_onnx_link  "${_xwl_lib}/libonnxruntime.1.22.0.dylib")
+endif()
+
+if(NOT EXISTS "${_xwl_piper_link}")
     message(FATAL_ERROR
-        "xp_wellys_libs bundle incomplete: ${_xwl_lib}/libpiper.dylib missing. "
+        "xp_wellys_libs bundle incomplete: ${_xwl_piper_link} missing. "
         "Re-run `make setup` in the plugin repo to download it.")
 endif()
 
 # ── Piper-only target — present in EVERY bundle ──────────────────────────────
-# The self-contained Piper dylib (statically bundles espeak-ng) + the
-# onnxruntime dylib it resolves via @loader_path. Pure CPU: no whisper/llama,
-# no Metal. This is what the plugin's hybrid TTS slices link (issue #69).
+# The self-contained Piper library (statically bundles espeak-ng) + onnxruntime.
+# Pure CPU: no whisper/llama, no Metal. This is what the plugin's hybrid TTS
+# slices link (issue #69). On macOS the .dylib resolves onnxruntime via
+# @loader_path; on Windows the consumer links piper.lib/onnxruntime.lib and
+# ships piper.dll + onnxruntime.dll next to the plugin.
 add_library(xp_wellys_libs::piper INTERFACE IMPORTED)
 target_include_directories(xp_wellys_libs::piper INTERFACE "${_xwl_inc}")
 target_link_libraries(xp_wellys_libs::piper INTERFACE
-    "${_xwl_lib}/libpiper.dylib"
-    "${_xwl_lib}/libonnxruntime.1.22.0.dylib"
+    "${_xwl_piper_link}"
+    "${_xwl_onnx_link}"
 )
 
 # ── Full inference target — only in the arm64 full bundle ─────────────────────

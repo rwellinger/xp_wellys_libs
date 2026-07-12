@@ -1,0 +1,30 @@
+diff --git a/libpiper/src/piper.cpp b/libpiper/src/piper.cpp
+index 774e87d..11ea2dd 100644
+--- a/libpiper/src/piper.cpp
++++ b/libpiper/src/piper.cpp
+@@ -2,6 +2,7 @@
+ #include "piper_impl.hpp"
+ 
+ #include <array>
++#include <filesystem>
+ #include <fstream>
+ #include <limits>
+ 
+@@ -96,8 +97,17 @@ struct piper_synthesizer *piper_create(const char *model_path,
+     synth->session_options.DisableMemPattern();
+     synth->session_options.DisableProfiling();
+ 
++#ifdef _WIN32
++    // onnxruntime's Ort::Session takes ORTCHAR_T* = wchar_t* on Windows, but
++    // model_path is a UTF-8 char*. Convert it to a wide path first. (On macOS/
++    // Linux ORTCHAR_T is char, so the original narrow-path form below compiles.)
++    synth->session = std::make_unique<Ort::Session>(
++        ort_env, std::filesystem::u8path(model_path).wstring().c_str(),
++        synth->session_options);
++#else
+     synth->session = std::make_unique<Ort::Session>(
+         Ort::Session(ort_env, model_path, synth->session_options));
++#endif
+ 
+     return synth;
+ }

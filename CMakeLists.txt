@@ -78,20 +78,38 @@ endif()
 # ── Piper (provides piper; pulls espeak-ng static + onnxruntime prebuilt) ────
 add_subdirectory(${TP}/piper1-gpl/libpiper ${CMAKE_BINARY_DIR}/libpiper EXCLUDE_FROM_ALL)
 
+# Two Windows-only fixes for the Piper DLL (no-ops off Windows):
+if(WIN32 AND TARGET piper)
+    # 1) espeak-ng is linked statically, but its speak_lib.h defaults to
+    #    __declspec(dllimport) on Windows (→ unresolved __imp_espeak_* /
+    #    LNK2019). LIBESPEAK_NG_EXPORT makes the header use dllexport instead,
+    #    so the plain symbols resolve from the static espeak-ng.lib.
+    target_compile_definitions(piper PRIVATE LIBESPEAK_NG_EXPORT)
+    # 2) piper.h declares its C API without __declspec(dllexport), so piper.dll
+    #    would export nothing and its import lib would be empty (consumers hit
+    #    LNK2019 on piper_create). Auto-export all symbols so piper.lib carries
+    #    the API. (On macOS symbols are exported by default — non-issue.)
+    set_target_properties(piper PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+endif()
+
 set(ESPEAK_DATA_DIR "${CMAKE_BINARY_DIR}/espeak_ng-install/share/espeak-ng-data")
 
-# onnxruntime is fetched + extracted by libpiper into lib/onnxruntime-osx-<arch>-
-# <ver>/, where <arch> follows CMAKE_SYSTEM_PROCESSOR — the same key libpiper
-# uses (see its CMakeLists). Derive the staging dir the same way. On macOS this
-# is always arm64 (the only macOS bundle we ship); the guard is kept so the
-# derivation stays correct if a native x86_64 macOS build is ever revived.
-if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-    set(_onnx_arch "x86_64")
+# onnxruntime is fetched + extracted by libpiper into lib/onnxruntime-<prefix>/,
+# where <prefix> follows the platform/arch the same way libpiper picks it (see
+# its CMakeLists onnx block). Derive the staging dir + the bundle platform label
+# the same way. macOS ships only the arm64 full bundle; Windows ships the
+# win-x64 Piper-only bundle (plugin #73/#74).
+if(WIN32)
+    set(_onnx_prefix "onnxruntime-win-x64-1.22.0")
+    set(_platform "win-x64")
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(_onnx_prefix "onnxruntime-osx-x86_64-1.22.0")
+    set(_platform "x86_64-macos")
 else()
-    set(_onnx_arch "arm64")
+    set(_onnx_prefix "onnxruntime-osx-arm64-1.22.0")
+    set(_platform "arm64-macos")
 endif()
-set(ONNX_LIB_DIR
-    "${TP}/piper1-gpl/libpiper/lib/onnxruntime-osx-${_onnx_arch}-1.22.0/lib")
+set(ONNX_LIB_DIR "${TP}/piper1-gpl/libpiper/lib/${_onnx_prefix}/lib")
 
 # ── Bundle target ────────────────────────────────────────────────────────────
 # Copies each built archive + the Piper/onnx dylibs + headers + espeak-ng-data
@@ -127,6 +145,17 @@ foreach(t ${_bundle_targets})
 endforeach()
 add_dependencies(bundle ${_present_targets})
 
+# On Windows a SHARED lib splits into the runtime DLL ($<TARGET_FILE>, staged
+# above) and the import .lib the consumer links against ($<TARGET_LINKER_FILE>).
+# Stage piper's import lib too. On macOS the dylib IS its own linker file, so
+# this is Windows-only.
+if(WIN32 AND TARGET piper)
+    add_custom_command(TARGET bundle POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_LINKER_FILE:piper>" "${BUNDLE}/lib/"
+        VERBATIM)
+endif()
+
 # Headers (configure-time paths in the submodule source trees). piper.h is
 # always staged; the whisper/llama/ggml/common headers only in the full bundle.
 add_custom_command(TARGET bundle POST_BUILD
@@ -150,17 +179,39 @@ if(NOT XPWELLYS_LIBS_TTS_ONLY)
         VERBATIM)
 endif()
 
-# onnxruntime dylibs (versioned + alias) + espeak-ng-data — produced at build
-# time by Piper's ExternalProject, so this runs after piper via the dependency.
-add_custom_command(TARGET bundle POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNX_LIB_DIR}/libonnxruntime.1.22.0.dylib" "${BUNDLE}/lib/"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ONNX_LIB_DIR}/libonnxruntime.dylib" "${BUNDLE}/lib/"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${ESPEAK_DATA_DIR}" "${BUNDLE}/share/espeak-ng-data"
-    COMMENT "Copying onnxruntime dylibs + espeak-ng-data into bundle"
-    VERBATIM)
+# onnxruntime runtime libs + espeak-ng-data — produced at build time by Piper's
+# ExternalProject, so this runs after piper via the dependency. Windows ships
+# onnxruntime.dll + its import .lib; macOS ships the versioned dylib + alias.
+if(WIN32)
+    # Stage EVERY onnxruntime DLL, not just onnxruntime.dll — the win-x64
+    # package can ship runtime siblings (e.g. onnxruntime_providers_shared.dll)
+    # that onnxruntime.dll load-time-depends on; missing one crashes any process
+    # that loads Piper. libpiper downloads + extracts onnx at configure time, so
+    # the glob is populated here.
+    file(GLOB _onnx_dlls "${ONNX_LIB_DIR}/*.dll")
+    foreach(_dll ${_onnx_dlls})
+        add_custom_command(TARGET bundle POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" "${BUNDLE}/lib/"
+            VERBATIM)
+    endforeach()
+    add_custom_command(TARGET bundle POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNX_LIB_DIR}/onnxruntime.lib" "${BUNDLE}/lib/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${ESPEAK_DATA_DIR}" "${BUNDLE}/share/espeak-ng-data"
+        COMMENT "Copying onnxruntime DLLs + import lib + espeak-ng-data into bundle"
+        VERBATIM)
+else()
+    add_custom_command(TARGET bundle POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNX_LIB_DIR}/libonnxruntime.1.22.0.dylib" "${BUNDLE}/lib/"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNX_LIB_DIR}/libonnxruntime.dylib" "${BUNDLE}/lib/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${ESPEAK_DATA_DIR}" "${BUNDLE}/share/espeak-ng-data"
+        COMMENT "Copying onnxruntime dylibs + espeak-ng-data into bundle"
+        VERBATIM)
+endif()
 
 # Consumer cmake + manifest (SHA256 of every lib + the submodule pins).
 add_custom_command(TARGET bundle POST_BUILD
@@ -168,7 +219,7 @@ add_custom_command(TARGET bundle POST_BUILD
         "${CMAKE_SOURCE_DIR}/cmake/xp_wellys_libs.cmake" "${BUNDLE}/"
     COMMAND ${CMAKE_COMMAND}
         -DBUNDLE=${BUNDLE} -DSRC=${CMAKE_SOURCE_DIR}
-        -DARCH=${_onnx_arch} -DTTS_ONLY=${XPWELLYS_LIBS_TTS_ONLY}
+        -DPLATFORM=${_platform} -DTTS_ONLY=${XPWELLYS_LIBS_TTS_ONLY}
         -P "${CMAKE_SOURCE_DIR}/cmake/write_manifest.cmake"
     COMMENT "Writing xp_wellys_libs.cmake + manifest.txt"
     VERBATIM)
