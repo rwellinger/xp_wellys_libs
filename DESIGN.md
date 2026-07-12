@@ -15,13 +15,25 @@ publishes a versioned binary bundle as a GitHub release. The main repo then
 downloads the bundle in `make setup` (seconds) instead of compiling it. The
 release build becomes deterministic ~5–8 min, cold or warm.
 
-## Scope: arm64 macOS only
+## Scope: two bundle kinds
 
-Local inference in the plugin is **Apple-Silicon-only** (Metal STT/LM, CPU
-TTS). The x86_64 and Windows slices are cloud-only (OpenAI/Mistral over
-libcurl) and carry **no** local backends. So this repo produces exactly one
-bundle: `arm64-macos`. There is intentionally no Windows/Linux/x86_64
-artifact — there is nothing local to build for those targets.
+Local **STT/LM** (whisper.cpp + llama.cpp, Metal-accelerated) is
+**Apple-Silicon-only**. Local **TTS** (Piper) is pure CPU (onnxruntime +
+espeak-ng, no Metal), so it is portable to Intel Macs and Windows — the plugin's
+hybrid mode (cloud STT/LM + local German Piper voice, plugin issue #69) needs it
+on those slices too. So this repo produces two bundle kinds:
+
+| Bundle | Contents | Consumer target | Built by |
+|---|---|---|---|
+| `arm64-macos` (full) | whisper + llama + ggml/Metal + Piper | `xp_wellys_libs::inference` (+ `::piper`) | `macos-15` (arm64) |
+| `x86_64-macos` (tts-only) | Piper + onnxruntime + espeak-ng-data | `xp_wellys_libs::piper` | `macos-13` (Intel) |
+
+The Piper-only bundle is selected with `-DXPWELLYS_LIBS_TTS_ONLY=ON`; it skips
+whisper/llama/ggml/Metal entirely. Piper picks its onnxruntime arch from
+`CMAKE_SYSTEM_PROCESSOR`, so the x86_64 bundle is built on a **native Intel**
+process (CI's `macos-13` runner; locally only under an x86_64 cmake) — a plain
+cross `-arch` flag is not enough. A Windows Piper-only bundle is the next step
+(plugin issues #73/#74).
 
 ## What the bundle contains
 

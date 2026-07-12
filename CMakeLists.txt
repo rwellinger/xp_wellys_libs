@@ -13,6 +13,17 @@ project(xp_wellys_libs C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ── Bundle kind ──────────────────────────────────────────────────────────────
+# Default OFF: the full arm64 bundle (whisper.cpp + llama.cpp + ggml/Metal +
+# Piper), exactly as before. ON: a Piper-ONLY bundle (libpiper + onnxruntime +
+# espeak-ng-data, no whisper/llama/ggml/Metal) — pure CPU TTS, so it builds for
+# x86_64-macOS and Windows too. This is what the plugin's hybrid mode consumes
+# on the non-Apple-Silicon slices (issue #69/#71); pair it with
+# -DCMAKE_OSX_ARCHITECTURES=x86_64 built under Rosetta / on an Intel runner so
+# Piper picks the x86_64 onnxruntime (it keys off CMAKE_SYSTEM_PROCESSOR).
+option(XPWELLYS_LIBS_TTS_ONLY
+    "Build a Piper-only bundle (no whisper/llama/ggml/Metal)" OFF)
+
 # arm64 + macOS 13.3, matching the plugin's local-inference slice exactly
 # (onnxruntime 1.22.0's prebuilt dylib is built against the 13.3 SDK).
 if(NOT CMAKE_OSX_ARCHITECTURES)
@@ -31,40 +42,56 @@ endif()
 
 set(TP "${CMAKE_SOURCE_DIR}/third_party")
 
-# ── Shared ggml / Metal options (lifted verbatim from the plugin build) ──────
-# Order matters: llama.cpp is added FIRST so its pinned `ggml` target wins;
-# whisper.cpp then reuses that target instead of pulling a second copy.
-set(BUILD_SHARED_LIBS        OFF CACHE BOOL "" FORCE)
-set(GGML_METAL               ON  CACHE BOOL "" FORCE)
-set(GGML_METAL_EMBED_LIBRARY ON  CACHE BOOL "" FORCE)
-set(GGML_ACCELERATE          ON  CACHE BOOL "" FORCE)
-set(GGML_BLAS                OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-# ── llama.cpp (provides ggml, llama, llama-common) ───────────────────────────
-set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)
-# See the plugin CMakeLists: leaving httplib's OpenSSL on drags a hard
-# /opt/homebrew openssl LC_LOAD_DYLIB into libcommon that does not exist on
-# end-user Macs. We never use httplib's HTTPS path.
-set(LLAMA_OPENSSL        OFF CACHE BOOL "" FORCE)
-add_subdirectory(${TP}/llama.cpp ${CMAKE_BINARY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
+# whisper.cpp + llama.cpp + ggml/Metal are the Metal STT/LM half of the bundle
+# — arm64-only and skipped entirely for a Piper-only build.
+if(NOT XPWELLYS_LIBS_TTS_ONLY)
+    # ── Shared ggml / Metal options (lifted verbatim from the plugin build) ──
+    # Order matters: llama.cpp is added FIRST so its pinned `ggml` target wins;
+    # whisper.cpp then reuses that target instead of pulling a second copy.
+    set(GGML_METAL               ON  CACHE BOOL "" FORCE)
+    set(GGML_METAL_EMBED_LIBRARY ON  CACHE BOOL "" FORCE)
+    set(GGML_ACCELERATE          ON  CACHE BOOL "" FORCE)
+    set(GGML_BLAS                OFF CACHE BOOL "" FORCE)
 
-# ── whisper.cpp (provides whisper; reuses llama's ggml target) ───────────────
-set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
-add_subdirectory(${TP}/whisper.cpp ${CMAKE_BINARY_DIR}/whisper.cpp EXCLUDE_FROM_ALL)
+    # ── llama.cpp (provides ggml, llama, llama-common) ───────────────────────
+    set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(LLAMA_CURL           OFF CACHE BOOL "" FORCE)
+    # See the plugin CMakeLists: leaving httplib's OpenSSL on drags a hard
+    # /opt/homebrew openssl LC_LOAD_DYLIB into libcommon that does not exist on
+    # end-user Macs. We never use httplib's HTTPS path.
+    set(LLAMA_OPENSSL        OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${TP}/llama.cpp ${CMAKE_BINARY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
+
+    # ── whisper.cpp (provides whisper; reuses llama's ggml target) ───────────
+    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${TP}/whisper.cpp ${CMAKE_BINARY_DIR}/whisper.cpp EXCLUDE_FROM_ALL)
+endif()
 
 # ── Piper (provides piper; pulls espeak-ng static + onnxruntime prebuilt) ────
 add_subdirectory(${TP}/piper1-gpl/libpiper ${CMAKE_BINARY_DIR}/libpiper EXCLUDE_FROM_ALL)
 
 set(ESPEAK_DATA_DIR "${CMAKE_BINARY_DIR}/espeak_ng-install/share/espeak-ng-data")
+
+# onnxruntime is fetched + extracted by libpiper into lib/onnxruntime-osx-<arch>-
+# <ver>/, where <arch> follows CMAKE_SYSTEM_PROCESSOR (x86_64 under Rosetta / on
+# an Intel runner, arm64 otherwise) — the same key libpiper uses at line 65-73.
+# Derive the staging dir the same way so a Piper-only x86_64 build stages the
+# x86_64 onnxruntime, not the arm64 one.
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    set(_onnx_arch "x86_64")
+else()
+    set(_onnx_arch "arm64")
+endif()
 set(ONNX_LIB_DIR
-    "${TP}/piper1-gpl/libpiper/lib/onnxruntime-osx-arm64-1.22.0/lib")
+    "${TP}/piper1-gpl/libpiper/lib/onnxruntime-osx-${_onnx_arch}-1.22.0/lib")
 
 # ── Bundle target ────────────────────────────────────────────────────────────
 # Copies each built archive + the Piper/onnx dylibs + headers + espeak-ng-data
@@ -84,8 +111,7 @@ set(_bundle_targets
 
 add_custom_target(bundle
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${BUNDLE}/lib" "${BUNDLE}/include" "${BUNDLE}/include/ggml"
-        "${BUNDLE}/include/common" "${BUNDLE}/share"
+        "${BUNDLE}/lib" "${BUNDLE}/include" "${BUNDLE}/share"
     COMMENT "Staging xp_wellys_libs bundle -> ${BUNDLE}"
     VERBATIM)
 
@@ -101,20 +127,28 @@ foreach(t ${_bundle_targets})
 endforeach()
 add_dependencies(bundle ${_present_targets})
 
-# Headers (configure-time paths in the submodule source trees).
+# Headers (configure-time paths in the submodule source trees). piper.h is
+# always staged; the whisper/llama/ggml/common headers only in the full bundle.
 add_custom_command(TARGET bundle POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${TP}/whisper.cpp/include/whisper.h" "${BUNDLE}/include/"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${TP}/llama.cpp/include/llama.h" "${BUNDLE}/include/"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${TP}/llama.cpp/ggml/include" "${BUNDLE}/include/ggml"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${TP}/llama.cpp/common" "${BUNDLE}/include/common"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${TP}/piper1-gpl/libpiper/include/piper.h" "${BUNDLE}/include/"
-    COMMENT "Copying headers into bundle"
+    COMMENT "Copying piper.h into bundle"
     VERBATIM)
+if(NOT XPWELLYS_LIBS_TTS_ONLY)
+    add_custom_command(TARGET bundle POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${BUNDLE}/include/ggml" "${BUNDLE}/include/common"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TP}/whisper.cpp/include/whisper.h" "${BUNDLE}/include/"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TP}/llama.cpp/include/llama.h" "${BUNDLE}/include/"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${TP}/llama.cpp/ggml/include" "${BUNDLE}/include/ggml"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${TP}/llama.cpp/common" "${BUNDLE}/include/common"
+        COMMENT "Copying whisper/llama/ggml/common headers into bundle"
+        VERBATIM)
+endif()
 
 # onnxruntime dylibs (versioned + alias) + espeak-ng-data — produced at build
 # time by Piper's ExternalProject, so this runs after piper via the dependency.
@@ -134,6 +168,7 @@ add_custom_command(TARGET bundle POST_BUILD
         "${CMAKE_SOURCE_DIR}/cmake/xp_wellys_libs.cmake" "${BUNDLE}/"
     COMMAND ${CMAKE_COMMAND}
         -DBUNDLE=${BUNDLE} -DSRC=${CMAKE_SOURCE_DIR}
+        -DARCH=${_onnx_arch} -DTTS_ONLY=${XPWELLYS_LIBS_TTS_ONLY}
         -P "${CMAKE_SOURCE_DIR}/cmake/write_manifest.cmake"
     COMMENT "Writing xp_wellys_libs.cmake + manifest.txt"
     VERBATIM)

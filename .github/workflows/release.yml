@@ -2,7 +2,7 @@ name: Build & Release bundle
 
 on:
   # Tag push cuts a release; main push / manual dispatch build + smoke-test
-  # only (no release), so the bundle is proven before it is ever published.
+  # only (no release), so each bundle is proven before it is ever published.
   push:
     branches: [main]
     tags: ['v*']
@@ -14,10 +14,30 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15 # arm64, matches the plugin's release runner + toolchain
-    timeout-minutes: 90 # cold compile of whisper/llama/ggml/Piper/espeak
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90 # cold compile of whisper/llama/ggml/Piper/espeak (arm64)
     permissions:
       contents: write # create the release on tags
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Full arm64 bundle: whisper + llama + ggml/Metal + Piper.
+          - arch: arm64
+            runner: macos-15
+            build_cmd: make build
+            tarball_cmd: make tarball
+            smoke_root: build/bundle
+            artifact: xp_wellys_libs-arm64-macos
+          # Piper-only x86_64 bundle (issue #71): libpiper + onnxruntime +
+          # espeak-ng-data, no whisper/llama/Metal. Built natively on an Intel
+          # runner so Piper picks the x86_64 onnxruntime.
+          - arch: x86_64
+            runner: macos-13
+            build_cmd: make bundle-tts-x86_64
+            tarball_cmd: make tarball-tts-x86_64
+            smoke_root: build-tts-x86_64/bundle
+            artifact: xp_wellys_libs-x86_64-macos
     steps:
       - uses: actions/checkout@v5
         with:
@@ -32,45 +52,46 @@ jobs:
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
-          key: ${{ runner.os }}-arm64-libs
+          key: ${{ runner.os }}-${{ matrix.arch }}-libs
           max-size: 2500M
           variant: ccache
 
       - name: Build bundle
-        run: make build
+        run: ${{ matrix.build_cmd }}
 
       - name: Smoke-test — link the bundle exactly as the plugin will
         run: |
           set -euo pipefail
-          BUNDLE="$PWD/build/bundle"
+          BUNDLE="$PWD/${{ matrix.smoke_root }}"
           cmake -S smoke -B build/smoke -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DXP_WELLYS_LIBS_ROOT="$BUNDLE" \
             -Wno-dev
           cmake --build build/smoke
           # libpiper + onnxruntime resolve via @loader_path next to the binary.
-          cp build/bundle/lib/libpiper.dylib \
-             build/bundle/lib/libonnxruntime.1.22.0.dylib \
-             build/bundle/lib/libonnxruntime.dylib build/smoke/ 2>/dev/null || true
+          cp "$BUNDLE"/lib/libpiper.dylib \
+             "$BUNDLE"/lib/libonnxruntime.1.22.0.dylib \
+             "$BUNDLE"/lib/libonnxruntime.dylib build/smoke/ 2>/dev/null || true
           ./build/smoke/link_test
           ccache --show-stats
 
       - name: Package tarball
-        run: make tarball
+        run: ${{ matrix.tarball_cmd }}
 
       - name: Show manifest
-        run: cat build/bundle/manifest.txt
+        run: cat ${{ matrix.smoke_root }}/manifest.txt
 
       - name: Upload build artifact (every run)
         uses: actions/upload-artifact@v4
         with:
-          name: xp_wellys_libs-arm64-macos
-          path: xp_wellys_libs-arm64-macos-*.tar.gz
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}-*.tar.gz
           if-no-files-found: error
 
       - name: Create release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: xp_wellys_libs-arm64-macos-*.tar.gz
+          files: ${{ matrix.artifact }}-*.tar.gz
           generate_release_notes: true

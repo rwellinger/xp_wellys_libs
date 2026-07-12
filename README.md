@@ -1,12 +1,19 @@
 # xp_wellys_libs
 
-Prebuilt **arm64 macOS** local-inference libraries for
+Prebuilt local-inference libraries for
 [xp_wellys_vfr_atc](https://github.com/rwellinger/xp_wellys_vfr_atc).
 
-whisper.cpp + llama.cpp + ggml (Metal) + Piper + espeak-ng, compiled **once
-per pin bump** and published as a versioned binary bundle. The plugin
-downloads the bundle in `make setup` instead of compiling it from source —
-turning its ~50 min cold release build into a deterministic ~5–8 min one.
+Two bundle kinds, compiled **once per pin bump** and published as versioned
+binary bundles the plugin downloads in `make setup` (instead of compiling from
+source — turning its ~50 min cold release build into a deterministic ~5–8 min
+one):
+
+- **`arm64-macos` (full)** — whisper.cpp + llama.cpp + ggml (Metal) + Piper +
+  espeak-ng. The Apple-Silicon local-inference slice.
+- **`x86_64-macos` (tts-only)** — Piper + onnxruntime + espeak-ng only (pure
+  CPU, no whisper/llama/Metal). Feeds the plugin's hybrid mode (cloud STT/LM +
+  local German Piper voice) on Intel Macs (issue #71). A Windows Piper-only
+  bundle follows (#73/#74).
 
 See [DESIGN.md](DESIGN.md) for the full rationale, bundle layout, link-order
 handling, toolchain pinning, and the plugin-side consumption flow.
@@ -14,15 +21,26 @@ handling, toolchain pinning, and the plugin-side consumption flow.
 ## Build locally
 
 ```bash
-make setup     # init the whisper.cpp / llama.cpp / piper1-gpl submodules
-make build     # compile everything (the slow part; Homebrew LLVM auto-pinned)
-make bundle    # stage build/bundle/ (libs + headers + espeak-ng-data)
-make tarball   # -> xp_wellys_libs-arm64-macos-<version>.tar.gz
+make setup              # init the whisper.cpp / llama.cpp / piper1-gpl submodules
+
+# Full arm64 bundle:
+make bundle             # stage build/bundle/ (libs + headers + espeak-ng-data)
+make tarball            # -> xp_wellys_libs-arm64-macos-<version>.tar.gz
+
+# Piper-only bundles (issue #71):
+make bundle-tts-arm64   # local fast sanity of the TTS-only path (no whisper/llama)
+make tarball-tts-x86_64 # -> xp_wellys_libs-x86_64-macos-<version>.tar.gz
 ```
 
-CI (`.github/workflows/release.yml`) does the same on `macos-15`, link-smoke-
-tests the bundle exactly as the plugin will consume it, and on a `v*` tag
-publishes the tarball as a GitHub release.
+The x86_64 Piper-only bundle must be built on a **native Intel** process (Piper
+selects its onnxruntime arch from `CMAKE_SYSTEM_PROCESSOR`). CI uses a `macos-13`
+runner; locally on Apple Silicon it needs an x86_64 cmake (`ROSETTA='arch
+-x86_64'`) — the arm64 cmake cannot cross-select the onnx arch.
+
+CI (`.github/workflows/release.yml`) builds both kinds (arm64 full on `macos-15`,
+x86_64 tts-only on `macos-13`), link-smoke-tests each bundle exactly as the
+plugin will consume it, and on a `v*` tag publishes the tarballs as a GitHub
+release.
 
 ## Cut a release
 

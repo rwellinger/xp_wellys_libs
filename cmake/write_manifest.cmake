@@ -4,7 +4,18 @@
 file(READ "${SRC}/VERSION.txt" _ver)
 string(STRIP "${_ver}" _ver)
 
-set(_out "xp_wellys_libs ${_ver}  (arm64-macos)\n")
+# ARCH ("arm64" | "x86_64") and TTS_ONLY ("ON"/"OFF") are passed by the caller
+# (CMakeLists bundle target). Default to the historical arm64 full bundle.
+if(NOT DEFINED ARCH)
+    set(ARCH "arm64")
+endif()
+if(TTS_ONLY)
+    set(_kind "tts-only")
+else()
+    set(_kind "full")
+endif()
+
+set(_out "xp_wellys_libs ${_ver}  (${ARCH}-macos, ${_kind})\n")
 string(APPEND _out "\n[libs]\n")
 file(GLOB _libs "${BUNDLE}/lib/*")
 list(SORT _libs)
