@@ -78,6 +78,15 @@ endif()
 # ── Piper (provides piper; pulls espeak-ng static + onnxruntime prebuilt) ────
 add_subdirectory(${TP}/piper1-gpl/libpiper ${CMAKE_BINARY_DIR}/libpiper EXCLUDE_FROM_ALL)
 
+# espeak-ng is linked statically, but its speak_lib.h defaults to
+# __declspec(dllimport) on Windows (→ unresolved __imp_espeak_* / LNK2019).
+# Defining LIBESPEAK_NG_EXPORT makes the header use dllexport instead, so the
+# plain symbols resolve from the static espeak-ng.lib (piper.dll then re-exports
+# them, harmlessly). No-op off Windows.
+if(WIN32 AND TARGET piper)
+    target_compile_definitions(piper PRIVATE LIBESPEAK_NG_EXPORT)
+endif()
+
 set(ESPEAK_DATA_DIR "${CMAKE_BINARY_DIR}/espeak_ng-install/share/espeak-ng-data")
 
 # onnxruntime is fetched + extracted by libpiper into lib/onnxruntime-<prefix>/,
