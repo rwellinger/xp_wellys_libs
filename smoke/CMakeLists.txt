@@ -3,7 +3,11 @@ project(xp_wellys_libs_smoke CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_OSX_ARCHITECTURES "arm64")
+# Match the bundle's arch/deployment. Caller may override -DCMAKE_OSX_ARCHITECTURES
+# (x86_64 for a Piper-only x86_64 bundle); default arm64 like the full bundle.
+if(NOT CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "arm64")
+endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3")
 
 if(NOT DEFINED XP_WELLYS_LIBS_ROOT)
@@ -13,5 +17,12 @@ endif()
 # Consume the bundle exactly as the plugin will.
 include("${XP_WELLYS_LIBS_ROOT}/xp_wellys_libs.cmake")
 
-add_executable(link_test link_test.cpp)
-target_link_libraries(link_test PRIVATE xp_wellys_libs::inference)
+# Full bundle -> link the whole whisper/llama/ggml graph in declared order
+# (the one real link-order risk). Piper-only bundle -> link libpiper alone.
+if(TARGET xp_wellys_libs::inference)
+    add_executable(link_test link_test.cpp)
+    target_link_libraries(link_test PRIVATE xp_wellys_libs::inference)
+else()
+    add_executable(link_test piper_link_test.cpp)
+    target_link_libraries(link_test PRIVATE xp_wellys_libs::piper)
+endif()
