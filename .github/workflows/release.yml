@@ -119,24 +119,32 @@ jobs:
         # submodule fork so the pin stays upstream.
         run: git -C third_party/piper1-gpl apply "$PWD/patches/piper-win32-widepath.patch"
 
-      - name: Configure + build bundle (MSVC, Piper-only)
+      - name: Set up MSVC developer environment
+        # Puts cl.exe + the Windows SDK on PATH for CMake's Ninja generator.
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure + build bundle (Ninja + MSVC, Piper-only)
         shell: pwsh
+        # Ninja (single-config) — NOT the Visual Studio multi-config generator:
+        # libpiper hardcodes espeak/ucd static-lib paths WITHOUT a per-config
+        # subdir (…/ucd-tools/ucd.lib), which only exist under a single-config
+        # generator. Same generator the plugin's Windows build uses.
         run: |
-          cmake -B build-win -DCMAKE_BUILD_TYPE=Release `
+          cmake -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DXPWELLYS_LIBS_TTS_ONLY=ON -Wno-dev
-          cmake --build build-win --target bundle --config Release
+          cmake --build build-win --target bundle
 
       - name: Smoke-test — link the bundle exactly as the plugin will
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake -S smoke -B build-win/smoke -DCMAKE_BUILD_TYPE=Release `
+          cmake -S smoke -B build-win/smoke -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DXP_WELLYS_LIBS_ROOT="$PWD/build-win/bundle" -Wno-dev
-          cmake --build build-win/smoke --config Release
+          cmake --build build-win/smoke
           # piper.dll + onnxruntime.dll must sit next to the test exe.
-          Copy-Item build-win/bundle/lib/piper.dll        build-win/smoke/Release/
-          Copy-Item build-win/bundle/lib/onnxruntime.dll  build-win/smoke/Release/
-          & build-win/smoke/Release/link_test.exe
+          Copy-Item build-win/bundle/lib/piper.dll        build-win/smoke/
+          Copy-Item build-win/bundle/lib/onnxruntime.dll  build-win/smoke/
+          & build-win/smoke/link_test.exe
 
       - name: Package tarball
         shell: pwsh
