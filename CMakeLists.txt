@@ -78,13 +78,18 @@ endif()
 # ── Piper (provides piper; pulls espeak-ng static + onnxruntime prebuilt) ────
 add_subdirectory(${TP}/piper1-gpl/libpiper ${CMAKE_BINARY_DIR}/libpiper EXCLUDE_FROM_ALL)
 
-# espeak-ng is linked statically, but its speak_lib.h defaults to
-# __declspec(dllimport) on Windows (→ unresolved __imp_espeak_* / LNK2019).
-# Defining LIBESPEAK_NG_EXPORT makes the header use dllexport instead, so the
-# plain symbols resolve from the static espeak-ng.lib (piper.dll then re-exports
-# them, harmlessly). No-op off Windows.
+# Two Windows-only fixes for the Piper DLL (no-ops off Windows):
 if(WIN32 AND TARGET piper)
+    # 1) espeak-ng is linked statically, but its speak_lib.h defaults to
+    #    __declspec(dllimport) on Windows (→ unresolved __imp_espeak_* /
+    #    LNK2019). LIBESPEAK_NG_EXPORT makes the header use dllexport instead,
+    #    so the plain symbols resolve from the static espeak-ng.lib.
     target_compile_definitions(piper PRIVATE LIBESPEAK_NG_EXPORT)
+    # 2) piper.h declares its C API without __declspec(dllexport), so piper.dll
+    #    would export nothing and its import lib would be empty (consumers hit
+    #    LNK2019 on piper_create). Auto-export all symbols so piper.lib carries
+    #    the API. (On macOS symbols are exported by default — non-issue.)
+    set_target_properties(piper PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
 endif()
 
 set(ESPEAK_DATA_DIR "${CMAKE_BINARY_DIR}/espeak_ng-install/share/espeak-ng-data")
