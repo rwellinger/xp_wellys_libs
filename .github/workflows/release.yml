@@ -138,13 +138,20 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          Write-Host "--- bundle lib/ ---"
+          Get-ChildItem build-win/bundle/lib | Format-Table Name,Length
           cmake -S smoke -B build-win/smoke -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DXP_WELLYS_LIBS_ROOT="$PWD/build-win/bundle" -Wno-dev
           cmake --build build-win/smoke
-          # piper.dll + onnxruntime.dll must sit next to the test exe.
-          Copy-Item build-win/bundle/lib/piper.dll        build-win/smoke/
-          Copy-Item build-win/bundle/lib/onnxruntime.dll  build-win/smoke/
+          # Every bundled DLL must sit next to the test exe so the loader
+          # resolves piper.dll + its onnxruntime sibling(s).
+          Copy-Item build-win/bundle/lib/*.dll build-win/smoke/
+          Write-Host "--- smoke dir ---"
+          Get-ChildItem build-win/smoke/*.exe, build-win/smoke/*.dll | Format-Table Name
           & build-win/smoke/link_test.exe
+          $code = $LASTEXITCODE
+          Write-Host "link_test exit code: $code"
+          if ($code -ne 0) { throw "link_test failed with exit code $code" }
 
       - name: Package tarball
         shell: pwsh

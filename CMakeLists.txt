@@ -183,14 +183,23 @@ endif()
 # ExternalProject, so this runs after piper via the dependency. Windows ships
 # onnxruntime.dll + its import .lib; macOS ships the versioned dylib + alias.
 if(WIN32)
+    # Stage EVERY onnxruntime DLL, not just onnxruntime.dll — the win-x64
+    # package can ship runtime siblings (e.g. onnxruntime_providers_shared.dll)
+    # that onnxruntime.dll load-time-depends on; missing one crashes any process
+    # that loads Piper. libpiper downloads + extracts onnx at configure time, so
+    # the glob is populated here.
+    file(GLOB _onnx_dlls "${ONNX_LIB_DIR}/*.dll")
+    foreach(_dll ${_onnx_dlls})
+        add_custom_command(TARGET bundle POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_dll}" "${BUNDLE}/lib/"
+            VERBATIM)
+    endforeach()
     add_custom_command(TARGET bundle POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNX_LIB_DIR}/onnxruntime.dll" "${BUNDLE}/lib/"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${ONNX_LIB_DIR}/onnxruntime.lib" "${BUNDLE}/lib/"
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${ESPEAK_DATA_DIR}" "${BUNDLE}/share/espeak-ng-data"
-        COMMENT "Copying onnxruntime.dll + import lib + espeak-ng-data into bundle"
+        COMMENT "Copying onnxruntime DLLs + import lib + espeak-ng-data into bundle"
         VERBATIM)
 else()
     add_custom_command(TARGET bundle POST_BUILD
