@@ -110,6 +110,15 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Patch libpiper for Windows (onnxruntime wide model path)
+        shell: pwsh
+        # piper1-gpl v1.4.2 passes the UTF-8 char* model_path straight to
+        # Ort::Session, which wants ORTCHAR_T* = wchar_t* on Windows (fine on
+        # macOS/Linux where ORTCHAR_T is char). The patch is #ifdef _WIN32, so
+        # it only affects the Windows build. Kept as a patch here rather than a
+        # submodule fork so the pin stays upstream.
+        run: git -C third_party/piper1-gpl apply "$PWD/patches/piper-win32-widepath.patch"
+
       - name: Configure + build bundle (MSVC, Piper-only)
         shell: pwsh
         run: |
