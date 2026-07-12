@@ -16,11 +16,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ── Bundle kind ──────────────────────────────────────────────────────────────
 # Default OFF: the full arm64 bundle (whisper.cpp + llama.cpp + ggml/Metal +
 # Piper), exactly as before. ON: a Piper-ONLY bundle (libpiper + onnxruntime +
-# espeak-ng-data, no whisper/llama/ggml/Metal) — pure CPU TTS, so it builds for
-# x86_64-macOS and Windows too. This is what the plugin's hybrid mode consumes
-# on the non-Apple-Silicon slices (issue #69/#71); pair it with
-# -DCMAKE_OSX_ARCHITECTURES=x86_64 built under Rosetta / on an Intel runner so
-# Piper picks the x86_64 onnxruntime (it keys off CMAKE_SYSTEM_PROCESSOR).
+# espeak-ng-data, no whisper/llama/ggml/Metal) — pure CPU TTS, so it builds off
+# Apple Silicon too. This feeds the plugin's hybrid mode (cloud STT/LM + local
+# German Piper voice, issue #69) on the non-Apple-Silicon slices. Windows is the
+# live target (built on windows-latest, plugin #73/#74); x86_64-macOS was
+# dropped when GitHub retired the Intel runners.
 option(XPWELLYS_LIBS_TTS_ONLY
     "Build a Piper-only bundle (no whisper/llama/ggml/Metal)" OFF)
 
@@ -81,10 +81,10 @@ add_subdirectory(${TP}/piper1-gpl/libpiper ${CMAKE_BINARY_DIR}/libpiper EXCLUDE_
 set(ESPEAK_DATA_DIR "${CMAKE_BINARY_DIR}/espeak_ng-install/share/espeak-ng-data")
 
 # onnxruntime is fetched + extracted by libpiper into lib/onnxruntime-osx-<arch>-
-# <ver>/, where <arch> follows CMAKE_SYSTEM_PROCESSOR (x86_64 under Rosetta / on
-# an Intel runner, arm64 otherwise) — the same key libpiper uses at line 65-73.
-# Derive the staging dir the same way so a Piper-only x86_64 build stages the
-# x86_64 onnxruntime, not the arm64 one.
+# <ver>/, where <arch> follows CMAKE_SYSTEM_PROCESSOR — the same key libpiper
+# uses (see its CMakeLists). Derive the staging dir the same way. On macOS this
+# is always arm64 (the only macOS bundle we ship); the guard is kept so the
+# derivation stays correct if a native x86_64 macOS build is ever revived.
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     set(_onnx_arch "x86_64")
 else()

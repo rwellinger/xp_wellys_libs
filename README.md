@@ -10,10 +10,11 @@ one):
 
 - **`arm64-macos` (full)** — whisper.cpp + llama.cpp + ggml (Metal) + Piper +
   espeak-ng. The Apple-Silicon local-inference slice.
-- **`x86_64-macos` (tts-only)** — Piper + onnxruntime + espeak-ng only (pure
+- **`win-x64` (tts-only, planned)** — Piper + onnxruntime + espeak-ng only (pure
   CPU, no whisper/llama/Metal). Feeds the plugin's hybrid mode (cloud STT/LM +
-  local German Piper voice) on Intel Macs (issue #71). A Windows Piper-only
-  bundle follows (#73/#74).
+  local German Piper voice) on Windows (#73/#74). The x86_64-macOS variant was
+  dropped — GitHub retired the Intel CI runners (see DESIGN.md); Intel Macs keep
+  cloud TTS, no regression.
 
 See [DESIGN.md](DESIGN.md) for the full rationale, bundle layout, link-order
 handling, toolchain pinning, and the plugin-side consumption flow.
@@ -27,20 +28,16 @@ make setup              # init the whisper.cpp / llama.cpp / piper1-gpl submodul
 make bundle             # stage build/bundle/ (libs + headers + espeak-ng-data)
 make tarball            # -> xp_wellys_libs-arm64-macos-<version>.tar.gz
 
-# Piper-only bundles (issue #71):
+# Piper-only bundle (XPWELLYS_LIBS_TTS_ONLY):
 make bundle-tts-arm64   # local fast sanity of the TTS-only path (no whisper/llama)
-make tarball-tts-x86_64 # -> xp_wellys_libs-x86_64-macos-<version>.tar.gz
 ```
 
-The x86_64 Piper-only bundle must be built on a **native Intel** process (Piper
-selects its onnxruntime arch from `CMAKE_SYSTEM_PROCESSOR`). CI uses a `macos-13`
-runner; locally on Apple Silicon it needs an x86_64 cmake (`ROSETTA='arch
--x86_64'`) — the arm64 cmake cannot cross-select the onnx arch.
+The Windows Piper-only release bundle (plugin #73/#74) is built in CI on
+`windows-latest` with the same `XPWELLYS_LIBS_TTS_ONLY` option.
 
-CI (`.github/workflows/release.yml`) builds both kinds (arm64 full on `macos-15`,
-x86_64 tts-only on `macos-13`), link-smoke-tests each bundle exactly as the
-plugin will consume it, and on a `v*` tag publishes the tarballs as a GitHub
-release.
+CI (`.github/workflows/release.yml`) builds the arm64 full bundle on `macos-15`,
+link-smoke-tests it exactly as the plugin will consume it, and on a `v*` tag
+publishes the tarball as a GitHub release.
 
 ## Cut a release
 
