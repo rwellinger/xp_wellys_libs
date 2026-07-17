@@ -26,10 +26,12 @@ option(XPWELLYS_LIBS_TTS_ONLY
 
 # arm64 + macOS 13.3, matching the plugin's local-inference slice exactly
 # (onnxruntime 1.22.0's prebuilt dylib is built against the 13.3 SDK).
-if(NOT CMAKE_OSX_ARCHITECTURES)
-    set(CMAKE_OSX_ARCHITECTURES "arm64")
+if(APPLE)
+    if(NOT CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES "arm64")
+    endif()
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3")
 endif()
-set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3")
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
 
 # ccache if available — big win on same-pin re-runs.
@@ -44,16 +46,37 @@ set(TP "${CMAKE_SOURCE_DIR}/third_party")
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-# whisper.cpp + llama.cpp + ggml/Metal are the Metal STT/LM half of the bundle
-# — arm64-only and skipped entirely for a Piper-only build.
+# whisper.cpp + llama.cpp + ggml are the STT/LM half of the bundle — Metal on
+# macOS, plain CPU on Linux. Skipped entirely for a Piper-only build.
 if(NOT XPWELLYS_LIBS_TTS_ONLY)
-    # ── Shared ggml / Metal options (lifted verbatim from the plugin build) ──
+    # ── Shared ggml options (lifted verbatim from the plugin build) ──────────
     # Order matters: llama.cpp is added FIRST so its pinned `ggml` target wins;
     # whisper.cpp then reuses that target instead of pulling a second copy.
-    set(GGML_METAL               ON  CACHE BOOL "" FORCE)
-    set(GGML_METAL_EMBED_LIBRARY ON  CACHE BOOL "" FORCE)
-    set(GGML_ACCELERATE          ON  CACHE BOOL "" FORCE)
     set(GGML_BLAS                OFF CACHE BOOL "" FORCE)
+    if(APPLE)
+        set(GGML_METAL               ON  CACHE BOOL "" FORCE)
+        set(GGML_METAL_EMBED_LIBRARY ON  CACHE BOOL "" FORCE)
+        set(GGML_ACCELERATE          ON  CACHE BOOL "" FORCE)
+    else()
+        set(GGML_METAL               OFF CACHE BOOL "" FORCE)
+        set(GGML_METAL_EMBED_LIBRARY OFF CACHE BOOL "" FORCE)
+        set(GGML_ACCELERATE          OFF CACHE BOOL "" FORCE)
+        # A REDISTRIBUTABLE bundle must never carry -march=native: GGML_NATIVE
+        # defaults ON off-Apple, which would bake the CI runner's ISA (AVX-512
+        # on some Azure SKUs) into the archives -> SIGILL on user CPUs, with no
+        # stack trace, just "X-Plane crashes". OFF flips ggml's INS_ENB=ON ->
+        # SSE42/AVX/AVX2/BMI2/F16C baseline. macOS-arm64 has one ISA, so this
+        # only matters here.
+        set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+        # ggml links OpenMP PRIVATE onto ggml-base via a CMake target. We ship
+        # raw .a paths, so that link info cannot survive into the bundle and the
+        # consumer would hit undefined GOMP_*. ggml's own threadpool is the
+        # portable choice for a prebuilt.
+        set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
+        # The consumer links these archives into a MODULE (the .xpl shared
+        # object), so every object in them must be position-independent.
+        set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    endif()
 
     # ── llama.cpp (provides ggml, llama, llama-common) ───────────────────────
     set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)
@@ -96,20 +119,38 @@ set(ESPEAK_DATA_DIR "${CMAKE_BINARY_DIR}/espeak_ng-install/share/espeak-ng-data"
 
 # onnxruntime is fetched + extracted by libpiper into lib/onnxruntime-<prefix>/,
 # where <prefix> follows the platform/arch the same way libpiper picks it (see
-# its CMakeLists onnx block). Derive the staging dir + the bundle platform label
-# the same way. macOS ships only the arm64 full bundle; Windows ships the
-# win-x64 Piper-only bundle (plugin #73/#74).
+# its CMakeLists onnx block). Mirror that if/elseif shape EXACTLY, or we point
+# at a directory libpiper never extracted. macOS ships the arm64 full bundle,
+# Linux the linux-x64 full bundle, Windows the win-x64 Piper-only bundle
+# (plugin #73/#74).
 if(WIN32)
     set(_onnx_prefix "onnxruntime-win-x64-1.22.0")
     set(_platform "win-x64")
-elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-    set(_onnx_prefix "onnxruntime-osx-x86_64-1.22.0")
-    set(_platform "x86_64-macos")
+elseif(APPLE)
+    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+        set(_onnx_prefix "onnxruntime-osx-x86_64-1.22.0")
+        set(_platform "x86_64-macos")
+    else()
+        set(_onnx_prefix "onnxruntime-osx-arm64-1.22.0")
+        set(_platform "arm64-macos")
+    endif()
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+    # libpiper would happily extract onnxruntime-linux-aarch64, but no runner
+    # builds or releases this and nobody has ever linked it. A branch nobody
+    # tests is a lie -- fail loudly instead.
+    message(FATAL_ERROR "linux-arm64 is not built/released by this repo")
 else()
-    set(_onnx_prefix "onnxruntime-osx-arm64-1.22.0")
-    set(_platform "arm64-macos")
+    set(_onnx_prefix "onnxruntime-linux-x64-1.22.0")
+    set(_platform "linux-x64")
 endif()
 set(ONNX_LIB_DIR "${TP}/piper1-gpl/libpiper/lib/${_onnx_prefix}/lib")
+
+# REQUIRED, not optional: patchelf rewrites libpiper.so's RUNPATH during
+# staging. Without it the bundle would ship a .so pointing at a build-machine
+# path and fail to load onnxruntime on every user's box.
+if(UNIX AND NOT APPLE)
+    find_program(PATCHELF_EXECUTABLE patchelf REQUIRED)
+endif()
 
 # ── Bundle target ────────────────────────────────────────────────────────────
 # Copies each built archive + the Piper/onnx dylibs + headers + espeak-ng-data
@@ -201,7 +242,7 @@ if(WIN32)
             "${ESPEAK_DATA_DIR}" "${BUNDLE}/share/espeak-ng-data"
         COMMENT "Copying onnxruntime DLLs + import lib + espeak-ng-data into bundle"
         VERBATIM)
-else()
+elseif(APPLE)
     add_custom_command(TARGET bundle POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${ONNX_LIB_DIR}/libonnxruntime.1.22.0.dylib" "${BUNDLE}/lib/"
@@ -210,6 +251,33 @@ else()
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${ESPEAK_DATA_DIR}" "${BUNDLE}/share/espeak-ng-data"
         COMMENT "Copying onnxruntime dylibs + espeak-ng-data into bundle"
+        VERBATIM)
+else()
+    # libpiper.so's DT_NEEDED is the SONAME libonnxruntime.so.1, which the
+    # upstream tarball does not ship (it has .so -> .so.1.22.0 only), so we
+    # create it. create_symlink, NOT copy_if_different: the latter dereferences,
+    # which is why the macOS bundle carries libonnxruntime.dylib as a second
+    # 33 MB copy of the versioned file. Symlinks also make write_manifest emit
+    # `symlink <name>` lines, which the consumer's SHA256 grep skips by design.
+    add_custom_command(TARGET bundle POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNX_LIB_DIR}/libonnxruntime.so.1.22.0" "${BUNDLE}/lib/"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNX_LIB_DIR}/libonnxruntime_providers_shared.so" "${BUNDLE}/lib/"
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            libonnxruntime.so.1.22.0 "${BUNDLE}/lib/libonnxruntime.so.1"
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            libonnxruntime.so.1.22.0 "${BUNDLE}/lib/libonnxruntime.so"
+        # libpiper bakes an absolute build-machine RUNPATH into libpiper.so.
+        # Rewrite it HERE so the bundle is self-describing: the consumer stages
+        # onnxruntime next to libpiper.so and must not need to know about this.
+        # DT_RUNPATH is non-transitive, but libonnxruntime.so.1 is a DIRECT
+        # DT_NEEDED of libpiper.so, so $ORIGIN resolves it.
+        COMMAND ${PATCHELF_EXECUTABLE} --set-rpath "$ORIGIN"
+            "${BUNDLE}/lib/libpiper.so"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${ESPEAK_DATA_DIR}" "${BUNDLE}/share/espeak-ng-data"
+        COMMENT "Copying onnxruntime .so + espeak-ng-data into bundle"
         VERBATIM)
 endif()
 

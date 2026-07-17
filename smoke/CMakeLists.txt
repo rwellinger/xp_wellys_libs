@@ -5,10 +5,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Match the bundle's arch/deployment. Caller may override -DCMAKE_OSX_ARCHITECTURES
 # (x86_64 for a Piper-only x86_64 bundle); default arm64 like the full bundle.
-if(NOT CMAKE_OSX_ARCHITECTURES)
-    set(CMAKE_OSX_ARCHITECTURES "arm64")
+if(APPLE)
+    if(NOT CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES "arm64")
+    endif()
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3")
 endif()
-set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3")
 
 if(NOT DEFINED XP_WELLYS_LIBS_ROOT)
     message(FATAL_ERROR "pass -DXP_WELLYS_LIBS_ROOT=<extracted bundle root>")

@@ -1,6 +1,7 @@
 # xp_wellys_libs — Design
 
-Prebuilt local-inference libraries for **xp_wellys_vfr_atc**.
+Prebuilt local-inference libraries for **xp_wellys_vfr_atc** and
+**xp_welly_llm_atc**.
 
 ## Why this repo exists
 
@@ -15,21 +16,48 @@ publishes a versioned binary bundle as a GitHub release. The main repo then
 downloads the bundle in `make setup` (seconds) instead of compiling it. The
 release build becomes deterministic ~5–8 min, cold or warm.
 
-## Scope: two bundle kinds
+## Scope: three bundles, two kinds
 
-Local **STT/LM** (whisper.cpp + llama.cpp, Metal-accelerated) is
-**Apple-Silicon-only**. Local **TTS** (Piper) is pure CPU (onnxruntime +
-espeak-ng, no Metal), so it is portable off Apple Silicon — the plugin's hybrid
-mode (cloud STT/LM + local German Piper voice, plugin issue #69) needs it on
-those slices too. So this repo produces two bundle kinds:
+Local **STT/LM** (whisper.cpp + llama.cpp) is Metal-accelerated on Apple
+Silicon and plain-CPU elsewhere. Local **TTS** (Piper) is pure CPU (onnxruntime
++ espeak-ng, no Metal), so it is portable on its own — the plugin's hybrid mode
+(cloud STT/LM + local German Piper voice, plugin issue #69) needs it on slices
+that have no local STT/LM. So this repo produces two bundle *kinds* across
+three platforms:
 
 | Bundle | Contents | Consumer target | Built by |
 |---|---|---|---|
 | `arm64-macos` (full) | whisper + llama + ggml/Metal + Piper | `xp_wellys_libs::inference` (+ `::piper`) | `macos-15` (arm64) |
+| `linux-x64` (full) | whisper + llama + ggml/CPU + Piper | `xp_wellys_libs::inference` (+ `::piper`) | `ubuntu-22.04` |
 | `win-x64` (tts-only) | Piper + onnxruntime + espeak-ng-data | `xp_wellys_libs::piper` | `windows-latest` — **planned, plugin #73/#74** |
 
 The Piper-only bundle is selected with `-DXPWELLYS_LIBS_TTS_ONLY=ON`; it skips
 whisper/llama/ggml/Metal entirely.
+
+### Linux portability constraints
+
+A prebuilt that runs on *other people's* CPUs needs three things the from-source
+build never had to care about. All three are set in the `else()` (non-Apple)
+branch of the ggml options and asserted in CI, because every one of them looks
+perfectly healthy on the build runner and only fails at the user:
+
+- **`GGML_NATIVE=OFF`** — it defaults **ON** off-Apple, i.e. `-march=native`,
+  which would bake the runner's ISA (AVX-512 on some Azure SKUs) into the
+  archives and SIGILL on user CPUs with no stack trace. OFF flips ggml's
+  `INS_ENB=ON` → SSE42/AVX/AVX2/BMI2/F16C baseline.
+- **`GGML_OPENMP=OFF`** — ggml links OpenMP PRIVATE onto `ggml-base` via a CMake
+  target. The bundle ships raw `.a` paths, so that link info cannot survive and
+  the consumer would hit undefined `GOMP_*`. ggml's own threadpool has no such
+  dependency.
+- **glibc baseline = 2.35** (`ubuntu-22.04`, not 24.04). A prebuilt belongs on
+  the oldest base we support: 2.35 is consumable by Debian 12 (2.36) and newer,
+  whereas building on 24.04 (2.39) would lock those users out. Revisit only by
+  raising the floor deliberately.
+
+`libpiper.so` additionally gets its RUNPATH rewritten to `$ORIGIN` with
+`patchelf` **during staging**, not by the consumer: the bundle should describe
+itself, and a consumer without patchelf would otherwise ship a silently broken
+`.so`.
 
 **Dropped: x86_64-macOS.** A Piper-only Intel-Mac bundle was implemented (plugin
 #71) but cannot be produced in CI — GitHub retired the Intel `macos-13` runners
@@ -41,7 +69,14 @@ option + `::piper` target stay — the Windows bundle reuses exactly this machin
 
 ## What the bundle contains
 
-`xp_wellys_libs-arm64-macos-<version>.tar.gz`, extracting to:
+`xp_wellys_libs-<platform>-<version>.tar.gz`, extracting to the tree below
+(shown for `arm64-macos`; `linux-x64` is identical except that
+`libggml-metal.a` is absent and the Piper/onnxruntime files are
+`libpiper.so` / `libonnxruntime.so.1.22.0` + `.so.1` + `.so` symlinks +
+`libonnxruntime_providers_shared.so`). The tree is flat — the platform lives
+in the tarball name and in `manifest.txt`'s first line, and
+`xp_wellys_libs.cmake` refuses a bundle whose label does not match the
+consuming build.
 
 ```
 lib/
@@ -94,6 +129,11 @@ newer clang errors with `-Welaborated-enum-base` in vDSP.h / CoreFoundation).
 CI runs on `macos-15` (arm64), the same runner generation the plugin is
 released from.
 
+On Linux the toolchain is the runner's default GCC (`build-essential` on
+`ubuntu-22.04`) — again matching what the plugin's own Linux build uses. The
+same ABI-sensitivity argument applies, which is why the glibc floor above is a
+deliberate choice and not an accident of runner selection.
+
 ## Consumption (main repo)
 
 - A `PREBUILT_LIBS_VERSION` file in the plugin repo pins the bundle version.
@@ -123,6 +163,16 @@ whisper  llama-common  llama-common-base  llama  ggml-metal  ggml-cpu  ggml-base
 minor ordering slack is tolerated, but the file fixes a known-good order.
 **This is validated by the first CI run** — the plugin must link and its
 Catch2 suite must pass against the downloaded bundle before we cut a release.
+
+**On Linux the risk is eliminated, not managed.** GNU `ld` does not re-scan
+archives the way `ld64` does, and `ggml` ↔ `ggml-base`/`ggml-cpu` reference each
+other, so a single ordered pass is brittle. The non-Apple branch wraps the
+archives in `-Wl,--start-group ... -Wl,--end-group`, which makes the order
+irrelevant for a few extra link seconds (`lld` and `mold` honour it too). It
+also re-states `Threads::Threads`, `dl` and `m`, which ggml links PRIVATE onto
+`ggml-base` upstream via CMake targets — link info that raw `.a` paths cannot
+carry. `libggml-metal.a` is appended based on whether the bundle actually
+contains it, not on `if(APPLE)`, so the list describes the bundle at hand.
 
 ## Versioning workflow
 
