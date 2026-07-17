@@ -95,6 +95,107 @@ jobs:
           files: ${{ matrix.artifact }}-*.tar.gz
           generate_release_notes: true
 
+  # Linux x64 FULL bundle: whisper + llama + plain-CPU ggml + Piper. A separate
+  # job rather than a matrix entry on `build` — that job's steps are macOS-shaped
+  # (brew, -DCMAKE_OSX_ARCHITECTURES, the dylib cp), so folding Linux in would
+  # need deps_cmd/smoke_cmd/smoke_prep_cmd matrix fields and turn each entry into
+  # a disguised shell script. build-windows set the "platform != matrix entry"
+  # precedent; follow it.
+  #
+  # ubuntu-22.04 ON PURPOSE, not 24.04: this is a redistributable prebuilt, so it
+  # belongs on the OLDEST base we support. 22.04 gives glibc 2.35, which Debian 12
+  # (2.36) and newer can consume; building on 24.04 (2.39) would lock those users
+  # out.
+  build-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90 # cold compile of whisper/llama/ggml/Piper/espeak
+    permissions:
+      contents: write # create the release on tags
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        # patchelf is REQUIRED (CMakeLists find_program): it rewrites
+        # libpiper.so's RUNPATH to $ORIGIN during staging.
+        # Deliberately absent: libssl-dev (LLAMA_OPENSSL/CURL=OFF, onnxruntime
+        # is prebuilt), libomp-dev (GGML_OPENMP=OFF), BLAS (GGML_BLAS=OFF),
+        # libsonic/libpcaudio (libpiper disables both).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build ccache patchelf
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2.23
+        with:
+          key: Linux-x64-libs
+          max-size: 2500M
+          variant: ccache
+
+      - name: Build bundle
+        run: make build
+
+      - name: Smoke-test — link the bundle exactly as the plugin will
+        # No cp of the .so's: CMake gives link_test a BUILD_RPATH pointing at the
+        # bundle's lib/, and the bundle carries the libonnxruntime.so.1 SONAME
+        # libpiper.so needs.
+        run: |
+          set -euo pipefail
+          cmake -S smoke -B build/smoke -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DXP_WELLYS_LIBS_ROOT="$PWD/build/bundle" \
+            -Wno-dev
+          cmake --build build/smoke
+          ./build/smoke/link_test
+          ccache --show-stats
+
+      - name: Assert the bundle is portable
+        # These three checks catch failures that are INVISIBLE on the runner and
+        # only surface on a user's machine, so they are assertions, not review
+        # notes. -march=native would SIGILL on older CPUs; a build-machine
+        # RUNPATH would fail to load onnxruntime anywhere else; a stray OpenMP
+        # dep would leave the consumer with undefined GOMP_*.
+        run: |
+          set -euo pipefail
+          echo "--- libpiper.so RUNPATH (must be \$ORIGIN, not /home/runner/...) ---"
+          readelf -d build/bundle/lib/libpiper.so | grep -E 'RUNPATH|RPATH'
+          readelf -d build/bundle/lib/libpiper.so | grep -q 'RUNPATH.*\$ORIGIN'
+          echo "--- no OpenMP dependency in ggml ---"
+          ! nm build/bundle/lib/libggml-cpu.a 2>/dev/null | grep -q 'U GOMP_'
+          echo "--- link_test's resolved libs ---"
+          ldd build/smoke/link_test
+          echo "--- bundle contents ---"
+          ls -la build/bundle/lib/
+
+      - name: Package tarball
+        run: make tarball
+
+      - name: Assert symlinks survived the tarball
+        # If tar dereferenced them the bundle silently grows by ~30 MB and
+        # manifest.txt gains hash lines instead of `symlink` lines — the
+        # consumer's verify stays green either way, so check it here.
+        run: |
+          set -euo pipefail
+          tar -tvzf xp_wellys_libs-linux-x64-*.tar.gz | grep '^l'
+
+      - name: Show manifest
+        run: cat build/bundle/manifest.txt
+
+      - name: Upload build artifact (every run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: xp_wellys_libs-linux-x64
+          path: xp_wellys_libs-linux-x64-*.tar.gz
+          if-no-files-found: error
+
+      - name: Create release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: xp_wellys_libs-linux-x64-*.tar.gz
+          generate_release_notes: true
+
   # Windows x64 Piper-only (tts-only) bundle for the plugin's hybrid mode on
   # Windows (plugin #73/#74). MSVC on windows-latest; libcurl-free — Piper +
   # onnxruntime + espeak-ng only. No make (the Makefile is macOS-shaped); cmake

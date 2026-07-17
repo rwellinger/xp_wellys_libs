@@ -1,20 +1,30 @@
 # xp_wellys_libs
 
 Prebuilt local-inference libraries for
-[xp_wellys_vfr_atc](https://github.com/rwellinger/xp_wellys_vfr_atc).
+[xp_wellys_vfr_atc](https://github.com/rwellinger/xp_wellys_vfr_atc) and
+[xp_welly_llm_atc](https://github.com/rwellinger/xp_welly_llm_atc).
 
-Two bundle kinds, compiled **once per pin bump** and published as versioned
-binary bundles the plugin downloads in `make setup` (instead of compiling from
-source — turning its ~50 min cold release build into a deterministic ~5–8 min
+Three bundles, compiled **once per pin bump** and published as versioned
+binary bundles the plugins download in `make setup` (instead of compiling from
+source — turning their ~50 min cold release build into a deterministic ~5–8 min
 one):
 
 - **`arm64-macos` (full)** — whisper.cpp + llama.cpp + ggml (Metal) + Piper +
   espeak-ng. The Apple-Silicon local-inference slice.
+- **`linux-x64` (full)** — the same, with plain-CPU ggml (no Metal/Accelerate).
+  Built on `ubuntu-22.04` for a glibc-2.35 floor, with `GGML_NATIVE=OFF` so the
+  archives carry a portable ISA baseline rather than the runner's — see
+  DESIGN.md.
 - **`win-x64` (tts-only, planned)** — Piper + onnxruntime + espeak-ng only (pure
   CPU, no whisper/llama/Metal). Feeds the plugin's hybrid mode (cloud STT/LM +
   local German Piper voice) on Windows (#73/#74). The x86_64-macOS variant was
   dropped — GitHub retired the Intel CI runners (see DESIGN.md); Intel Macs keep
   cloud TTS, no regression.
+
+**This repo must stay public.** The plugins ship espeak-ng (GPL-3.0-or-later)
+as a binary, and their `THIRD_PARTY.md` points here for the corresponding
+source. Release assets must likewise not be deleted while a plugin version
+still pins them.
 
 See [DESIGN.md](DESIGN.md) for the full rationale, bundle layout, link-order
 handling, toolchain pinning, and the plugin-side consumption flow.
@@ -24,20 +34,26 @@ handling, toolchain pinning, and the plugin-side consumption flow.
 ```bash
 make setup              # init the whisper.cpp / llama.cpp / piper1-gpl submodules
 
-# Full arm64 bundle:
+# Full bundle for the host platform (arm64-macos or linux-x64):
 make bundle             # stage build/bundle/ (libs + headers + espeak-ng-data)
-make tarball            # -> xp_wellys_libs-arm64-macos-<version>.tar.gz
+make tarball            # -> xp_wellys_libs-<platform>-<version>.tar.gz
 
 # Piper-only bundle (XPWELLYS_LIBS_TTS_ONLY):
 make bundle-tts-arm64   # local fast sanity of the TTS-only path (no whisper/llama)
 ```
 
+The platform label is derived from `uname -s` and must match the one CMake
+writes into `manifest.txt` — the consumer builds its download URL from exactly
+these strings. Linux additionally needs `patchelf` installed (it rewrites
+`libpiper.so`'s RUNPATH during staging and is a hard `find_program` requirement).
+
 The Windows Piper-only release bundle (plugin #73/#74) is built in CI on
 `windows-latest` with the same `XPWELLYS_LIBS_TTS_ONLY` option.
 
-CI (`.github/workflows/release.yml`) builds the arm64 full bundle on `macos-15`,
-link-smoke-tests it exactly as the plugin will consume it, and on a `v*` tag
-publishes the tarball as a GitHub release.
+CI (`.github/workflows/release.yml`) builds the arm64 full bundle on `macos-15`
+and the linux-x64 full bundle on `ubuntu-22.04`, link-smoke-tests each exactly
+as the plugin will consume it, and on a `v*` tag publishes the tarballs as a
+GitHub release.
 
 ## Cut a release
 

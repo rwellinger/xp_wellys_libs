@@ -4,8 +4,9 @@
 # bumping an upstream pin offline. `make` with no target prints this help.
 #
 # Two bundle kinds:
-#   * full arm64 (default): whisper + llama + ggml/Metal + Piper.
-#       make bundle && make tarball  ->  xp_wellys_libs-arm64-macos-<ver>.tar.gz
+#   * full (default): whisper + llama + ggml + Piper. Metal on macOS-arm64,
+#     plain CPU on linux-x64. Platform is derived from the host below.
+#       make bundle && make tarball  ->  xp_wellys_libs-<platform>-<ver>.tar.gz
 #   * Piper-only (XPWELLYS_LIBS_TTS_ONLY): libpiper + onnxruntime +
 #     espeak-ng-data, no whisper/llama/Metal — pure CPU TTS.
 #       make bundle-tts-arm64        (local sanity of the TTS-only path)
@@ -14,6 +15,18 @@
 #     GitHub runner) — see release.yml.
 
 VERSION := $(shell cat VERSION.txt)
+
+# Mirror CMakeLists' _platform label -- the tarball name and manifest.txt must
+# agree, and the consumer derives the download URL from exactly these strings.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    PLATFORM  := arm64-macos
+    SHA256SUM := shasum -a 256
+else
+    PLATFORM  := linux-x64
+    SHA256SUM := sha256sum
+endif
+TARBALL := xp_wellys_libs-$(PLATFORM)-$(VERSION).tar.gz
 
 # Use Ninja when available (faster, parallel), else fall back to the Unix
 # Makefiles generator that ships with every macOS toolchain — so a machine
@@ -28,8 +41,8 @@ help:
 	@echo "xp_wellys_libs — prebuilt local-inference bundles"
 	@echo ""
 	@echo "  make setup             Init whisper.cpp / llama.cpp / piper1-gpl submodules"
-	@echo "  make bundle            Full arm64 bundle (whisper+llama+ggml/Metal+Piper)"
-	@echo "  make tarball           Package it -> xp_wellys_libs-arm64-macos-$(VERSION).tar.gz"
+	@echo "  make bundle            Full $(PLATFORM) bundle (whisper+llama+ggml+Piper)"
+	@echo "  make tarball           Package it -> $(TARBALL)"
 	@echo ""
 	@echo "  make bundle-tts-arm64  Piper-only arm64 bundle (local sanity of the TTS path)"
 	@echo ""
@@ -43,15 +56,17 @@ all: bundle
 setup:
 	git submodule update --init --recursive
 
-# ── Full arm64 bundle (default, unchanged) ───────────────────────────────────
+# ── Full bundle (default) — arm64-macos or linux-x64, per host ───────────────
 build bundle:
 	cmake -B build -G "$(GENERATOR)" -DCMAKE_BUILD_TYPE=Release -Wno-dev
 	cmake --build build --target bundle --parallel
 
+# No -h: the Linux bundle's libonnxruntime.so{,.1} MUST stay symlinks in the
+# tarball, or they unpack as two extra 15 MB copies.
 tarball: bundle
-	tar -C build/bundle -czf xp_wellys_libs-arm64-macos-$(VERSION).tar.gz .
-	@echo "Wrote xp_wellys_libs-arm64-macos-$(VERSION).tar.gz"
-	@shasum -a 256 xp_wellys_libs-arm64-macos-$(VERSION).tar.gz
+	tar -C build/bundle -czf $(TARBALL) .
+	@echo "Wrote $(TARBALL)"
+	@$(SHA256SUM) $(TARBALL)
 
 # ── Piper-only bundle (XPWELLYS_LIBS_TTS_ONLY) ───────────────────────────────
 # arm64 Piper-only — a fast local sanity check of the TTS-only build path
@@ -66,4 +81,4 @@ bundle-tts-arm64:
 
 clean:
 	rm -rf build build-tts-arm64 \
-	    xp_wellys_libs-arm64-macos-$(VERSION).tar.gz
+	    xp_wellys_libs-*-$(VERSION).tar.gz
