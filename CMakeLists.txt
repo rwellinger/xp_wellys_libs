@@ -151,13 +151,23 @@ if(NOT XPWELLYS_LIBS_TTS_ONLY)
             _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
     endif()
 
-    # Back to the dynamic CRT for Piper. piper.dll links espeak-ng.lib, which
-    # libpiper builds through an ExternalProject with fixed CMAKE_ARGS that do
-    # NOT forward CMAKE_MSVC_RUNTIME_LIBRARY — so espeak-ng is /MD no matter what
-    # we set here, and a /MT piper.dll would fail to link against it. Across the
-    # DLL boundary the CRT choice does not matter; within one module it does.
+    # Restore the EXACT pre-block state before libpiper is added. Not "set the
+    # runtime back to /MD" — UNSET both, which is what libpiper saw in the
+    # tts-only bundles (v0.2.0/v0.3.0) that worked in the field.
+    #
+    # Leaving CMP0091 at NEW is not harmless just because we point the runtime
+    # variable back at /MD: the policy changes HOW the CRT choice is delivered
+    # (a target property instead of a compiler flag). libpiper builds espeak-ng
+    # as an ExternalProject with fixed CMAKE_ARGS, which inherits the flags but
+    # not the property — so the two halves of piper.dll stop agreeing. That
+    # shipped in v0.4.0 and crashed X-Plane inside piper_create/onnxruntime on
+    # the first voice load, with no diagnostic.
+    #
+    # The whisper/llama/ggml targets are already configured at this point, so
+    # unsetting here does not affect their /MT setting.
     if(MSVC)
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+        unset(CMAKE_MSVC_RUNTIME_LIBRARY)
+        unset(CMAKE_POLICY_DEFAULT_CMP0091)
     endif()
 endif()
 

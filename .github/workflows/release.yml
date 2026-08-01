@@ -281,6 +281,20 @@ jobs:
           if (-not (Test-Path build-win/bundle/lib/vulkan-1.lib)) {
             throw "vulkan-1.lib was not staged — the consuming build would need a Vulkan SDK"
           }
+
+          #  3) piper.dll must stay on the DYNAMIC CRT. It links espeak-ng from an
+          #     ExternalProject that inherits compiler flags but not target
+          #     properties, so the two halves of the DLL must agree on how the CRT
+          #     is chosen. v0.4.0 got this wrong (CMP0091 leaked past the
+          #     whisper/llama block) and crashed X-Plane inside piper_create on the
+          #     first voice load — invisible on this runner, fatal in the cockpit.
+          #     A /MD build imports VCRUNTIME140.dll; a /MT one does not.
+          $dep = dumpbin /dependents build-win/bundle/lib/piper.dll | Out-String
+          if ($dep -notmatch 'VCRUNTIME140') {
+            throw "piper.dll does not import VCRUNTIME140 — it was built against the STATIC CRT, which breaks its espeak-ng half"
+          }
+          Write-Host "piper.dll is on the dynamic CRT (VCRUNTIME140 import present)"
+
           Write-Host "--- bundle lib/ ---"
           Get-ChildItem build-win/bundle/lib | Format-Table Name,Length
 
