@@ -205,11 +205,11 @@ jobs:
   # tradeoff for the accent-free German voice).
   build-windows:
     runs-on: windows-latest
-    # The 136 .comp shaders expand into ~2000 SPIR-V variants via glslc and 136
-    # generated .cpp with the SPIR-V embedded, on top of ggml-vulkan.cpp itself,
-    # whisper/llama/common and Piper/espeak. That is 45-80 min cold on a 4-core
-    # runner — 60 was sized for the Piper-only build.
-    timeout-minutes: 150
+    # Measured ~11 min cold for the full bundle (the 136 .comp shaders expand
+    # into SPIR-V arrays compiled into ggml-vulkan.lib, which is the bulk of it).
+    # 45 leaves a 4x margin for a slow runner without letting a hung job sit for
+    # hours.
+    timeout-minutes: 45
     permissions:
       contents: write
     env:
