@@ -29,6 +29,15 @@ if(TARGET xp_wellys_libs::inference)
     # not just the inference one.
     add_executable(piper_link_test piper_link_test.cpp)
     target_link_libraries(piper_link_test PRIVATE xp_wellys_libs::piper)
+endif()
+
+# Runtime test: actually creates a synthesizer and speaks. NOT run in CI (the
+# runner has no voice model, and onnxruntime's init is unreliable in a headless
+# session) — it is shipped so it can be run ON THE TARGET MACHINE, where it
+# isolates libpiper from the host application entirely. See the file header.
+if(TARGET xp_wellys_libs::piper)
+    add_executable(piper_runtime_test piper_runtime_test.cpp)
+    target_link_libraries(piper_runtime_test PRIVATE xp_wellys_libs::piper)
 else()
     add_executable(link_test piper_link_test.cpp)
     target_link_libraries(link_test PRIVATE xp_wellys_libs::piper)

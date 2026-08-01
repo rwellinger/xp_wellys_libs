@@ -316,12 +316,34 @@ jobs:
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
             -DXP_WELLYS_LIBS_ROOT="$PWD/build-win/bundle" -Wno-dev
           cmake --build build-win/smoke
-          foreach ($exe in @("link_test.exe","piper_link_test.exe")) {
+          foreach ($exe in @("link_test.exe","piper_link_test.exe","piper_runtime_test.exe")) {
             if (-not (Test-Path "build-win/smoke/$exe")) {
               throw "$exe was not produced — the bundle failed to link"
             }
             Write-Host "$exe linked OK (link-only smoke on Windows)"
           }
+
+      - name: Stage the runtime test for on-target use
+        shell: pwsh
+        # piper_runtime_test is built but NOT run here: this runner has no voice
+        # model and onnxruntime's init is unreliable headless. It is shipped as
+        # its own artifact so it can be run ON A REAL MACHINE, where it isolates
+        # libpiper from the host application. Bundled with the DLLs it needs, so
+        # dropping the folder anywhere and running it is enough.
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path runtime-test | Out-Null
+          Copy-Item build-win/smoke/piper_runtime_test.exe runtime-test/
+          Copy-Item build-win/bundle/lib/*.dll runtime-test/
+          Copy-Item -Recurse build-win/bundle/share/espeak-ng-data runtime-test/
+          Get-ChildItem runtime-test | Format-Table Name,Length
+
+      - name: Upload the runtime test (every run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: piper-runtime-test-win-x64
+          path: runtime-test
+          if-no-files-found: error
 
       - name: Package tarball
         shell: pwsh
