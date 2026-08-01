@@ -84,10 +84,12 @@ int main(int argc, char **argv) {
   // Which piper.dll actually got loaded, and from where. A stale copy elsewhere
   // on the search path would explain a lot and is invisible otherwise.
   step("resolving piper.dll");
-  if (HMODULE h = GetModuleHandleW(L"piper.dll")) {
-    wchar_t path[1024] = {};
-    if (GetModuleFileNameW(h, path, 1024)) {
-      std::wprintf(L"       loaded from: %ls\n", path);
+  if (HMODULE h = GetModuleHandleA("piper.dll")) {
+    // Narrow deliberately: std::wprintf is not reachable through <cstdio> on
+    // MSVC, and a console that may not be UTF-8 would mangle it anyway.
+    char path[1024] = {};
+    if (GetModuleFileNameA(h, path, sizeof(path))) {
+      std::printf("       loaded from: %s\n", path);
       std::fflush(stdout);
     }
   } else {
