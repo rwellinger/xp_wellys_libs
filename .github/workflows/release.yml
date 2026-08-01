@@ -223,14 +223,26 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Patch libpiper for Windows (onnxruntime wide model path)
+      - name: Patch libpiper for Windows (wide model path + lazy Ort::Env)
         shell: pwsh
-        # piper1-gpl v1.4.2 passes the UTF-8 char* model_path straight to
-        # Ort::Session, which wants ORTCHAR_T* = wchar_t* on Windows (fine on
-        # macOS/Linux where ORTCHAR_T is char). The patch is #ifdef _WIN32, so
-        # it only affects the Windows build. Kept as a patch here rather than a
-        # submodule fork so the pin stays upstream.
-        run: git -C third_party/piper1-gpl apply "$PWD/patches/piper-win32-widepath.patch"
+        # Two upstream problems, both Windows-only, both kept as patches rather
+        # than a submodule fork so the pin stays on upstream piper1-gpl v1.4.2:
+        #
+        #  1. widepath — piper passes the UTF-8 char* model_path straight to
+        #     Ort::Session, which wants ORTCHAR_T* = wchar_t* on Windows (fine
+        #     on macOS/Linux, where ORTCHAR_T is char).
+        #  2. lazy-ort-env — piper_impl.hpp declares `Ort::Env ort_env` at
+        #     NAMESPACE SCOPE. Its constructor calls CreateEnv, which starts
+        #     onnxruntime's thread pools and may load further DLLs; as a global
+        #     that runs while the module is being mapped, i.e. under the Windows
+        #     loader lock, where both are illegal. Result: an access violation
+        #     inside Ort::Env::Env before main() is even reached — the process
+        #     dies with no output and nothing to catch. Diagnosed from a crash
+        #     in the field, where the faulting offset resolved to exactly that
+        #     constructor. The patch makes it a function-local static.
+        run: |
+          git -C third_party/piper1-gpl apply "$PWD/patches/piper-win32-widepath.patch"
+          git -C third_party/piper1-gpl apply "$PWD/patches/piper-lazy-ort-env.patch"
 
       - name: Set up MSVC developer environment
         # Puts cl.exe + the Windows SDK on PATH for CMake's Ninja generator.

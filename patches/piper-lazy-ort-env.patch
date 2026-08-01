@@ -1,0 +1,46 @@
+diff --git a/libpiper/include/piper_impl.hpp b/libpiper/include/piper_impl.hpp
+--- a/libpiper/include/piper_impl.hpp
++++ b/libpiper/include/piper_impl.hpp
+@@ -35,7 +35,24 @@
+ const int DEFAULT_HOP_LENGTH = 256;
+ 
+ // onnx
+-Ort::Env ort_env{ORT_LOGGING_LEVEL_WARNING, "piper"};
++//
++// Constructed on FIRST USE, not at namespace scope. Ort::Env's constructor
++// calls OrtApi::CreateEnv, which spins up onnxruntime's thread pools and may
++// load further DLLs. As a global it runs while the module is being mapped - on
++// Windows that happens under the loader lock, where doing either is illegal.
++// The result is an access violation inside Ort::Env::Env before main() is ever
++// reached, so nothing can catch or report it: the process just dies.
++//
++// Windows only. macOS and Linux have no equivalent restriction, which is why
++// the same source runs fine there.
++//
++// A function-local static defers construction to the first piper_create call,
++// well outside the loader lock, and C++11 onwards guarantees it is initialised
++// exactly once and thread-safely.
++inline Ort::Env &get_ort_env() {
++  static Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "piper"};
++  return env;
++}
+ 
+ // espeak
+ #define CLAUSE_INTONATION_FULL_STOP 0x00000000
+diff --git a/libpiper/src/piper.cpp b/libpiper/src/piper.cpp
+--- a/libpiper/src/piper.cpp
++++ b/libpiper/src/piper.cpp
+@@ -102,11 +102,11 @@
+     // model_path is a UTF-8 char*. Convert it to a wide path first. (On macOS/
+     // Linux ORTCHAR_T is char, so the original narrow-path form below compiles.)
+     synth->session = std::make_unique<Ort::Session>(
+-        ort_env, std::filesystem::u8path(model_path).wstring().c_str(),
++        get_ort_env(), std::filesystem::u8path(model_path).wstring().c_str(),
+         synth->session_options);
+ #else
+     synth->session = std::make_unique<Ort::Session>(
+-        Ort::Session(ort_env, model_path, synth->session_options));
++        Ort::Session(get_ort_env(), model_path, synth->session_options));
+ #endif
+ 
+     return synth;
