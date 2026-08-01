@@ -16,23 +16,51 @@ publishes a versioned binary bundle as a GitHub release. The main repo then
 downloads the bundle in `make setup` (seconds) instead of compiling it. The
 release build becomes deterministic ~5–8 min, cold or warm.
 
-## Scope: three bundles, two kinds
+## Scope: three bundles
 
-Local **STT/LM** (whisper.cpp + llama.cpp) is Metal-accelerated on Apple
-Silicon and plain-CPU elsewhere. Local **TTS** (Piper) is pure CPU (onnxruntime
-+ espeak-ng, no Metal), so it is portable on its own — the plugin's hybrid mode
-(cloud STT/LM + local German Piper voice, plugin issue #69) needs it on slices
-that have no local STT/LM. So this repo produces two bundle *kinds* across
-three platforms:
+Local **STT/LM** (whisper.cpp + llama.cpp) is GPU-accelerated where a backend is
+available and plain-CPU elsewhere. Local **TTS** (Piper) is pure CPU (onnxruntime
++ espeak-ng), so it is portable on its own — the plugin's hybrid mode (cloud
+STT/LM + local German Piper voice, plugin issue #69) needs it on slices that have
+no local STT/LM. This repo produces three bundles:
 
 | Bundle | Contents | Consumer target | Built by |
 |---|---|---|---|
 | `arm64-macos` (full) | whisper + llama + ggml/Metal + Piper | `xp_wellys_libs::inference` (+ `::piper`) | `macos-15` (arm64) |
 | `linux-x64` (full) | whisper + llama + ggml/CPU + Piper | `xp_wellys_libs::inference` (+ `::piper`) | `ubuntu-22.04` |
-| `win-x64` (tts-only) | Piper + onnxruntime + espeak-ng-data | `xp_wellys_libs::piper` | `windows-latest` — **planned, plugin #73/#74** |
+| `win-x64` (full) | whisper + llama + ggml/CPU+Vulkan + Piper | `xp_wellys_libs::inference` (+ `::piper`) | `windows-latest` |
 
-The Piper-only bundle is selected with `-DXPWELLYS_LIBS_TTS_ONLY=ON`; it skips
-whisper/llama/ggml/Metal entirely.
+A Piper-only bundle is still selectable with `-DXPWELLYS_LIBS_TTS_ONLY=ON` (it
+skips whisper/llama/ggml entirely) and remains useful as a fast local sanity
+check, but no platform releases that kind anymore.
+
+### Windows portability constraints
+
+- **Vulkan, not CUDA.** CUDA would force the plugin's release to carry the CUDA
+  redist DLLs — `ggml-cuda` alone is 50–160 MB and `cuBLAS`/`cuBLASLt` run into
+  the hundreds — which is untenable for something shipped through the SkunkCrafts
+  updater. Vulkan adds **no runtime DLL at all**: `vulkan-1.dll` ships with the
+  graphics driver, and X-Plane 12 renders through Vulkan on Windows anyway, so it
+  is present on every target system. It also covers AMD/Intel. The cost is
+  roughly 10–30 % throughput versus CUDA on the same card.
+- **`vulkan-1.lib` is staged into the bundle.** `ggml-vulkan` drives everything
+  through the dynamic `vulkan.hpp` dispatcher, leaving exactly one symbol at link
+  time (`vkGetInstanceProcAddr`). Shipping that small import lib means the
+  *consuming* build needs no Vulkan SDK — only this repo's CI does.
+- **Static MSVC runtime (`/MT`) for the archives.** The consumer builds `/MT`
+  (its curl comes from vcpkg's `x64-windows-static`), and these archives link
+  into the same module as the plugin, so a mixed CRT means `LNK2005` or two heaps
+  in one module. Two traps this had to work around: whisper.cpp opens its
+  `CMakeLists.txt` with `cmake_minimum_required(VERSION 3.5)`, which resets
+  CMP0091 and would silently ignore `CMAKE_MSVC_RUNTIME_LIBRARY` **for
+  `whisper.lib` alone** (hence `CMAKE_POLICY_DEFAULT_CMP0091 NEW`); and libpiper
+  builds espeak-ng as an ExternalProject with fixed `CMAKE_ARGS` that do not
+  forward the runtime setting, so `/MT` is scoped to the whisper/llama block and
+  Piper stays `/MD` behind its DLL boundary. CI asserts both with
+  `dumpbin /directives`, and `xp_wellys_libs.cmake` fails the consumer's configure
+  outright if it is not building `/MT`.
+- **No `-march=native`** — the same `GGML_NATIVE=OFF` reasoning as Linux applies
+  verbatim; under MSVC that baseline resolves to `/arch:AVX2`.
 
 ### Linux portability constraints
 
@@ -65,7 +93,9 @@ itself, and a consumer without patchelf would otherwise ship a silently broken
 `CMAKE_SYSTEM_PROCESSOR`, so cross-building on an arm64 runner would need patching
 the pinned espeak-ng submodule's ExternalProject. Intel Macs are a shrinking
 niche with **no regression** (they keep cloud TTS). The `XPWELLYS_LIBS_TTS_ONLY`
-option + `::piper` target stay — the Windows bundle reuses exactly this machinery.
+option + `::piper` target stay: the option as a local sanity check, the target
+because every bundle defines it (the plugin's hybrid TTS override is available
+in all backend modes).
 
 ## What the bundle contains
 

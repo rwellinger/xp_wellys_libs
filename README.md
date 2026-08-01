@@ -15,11 +15,12 @@ one):
   Built on `ubuntu-22.04` for a glibc-2.35 floor, with `GGML_NATIVE=OFF` so the
   archives carry a portable ISA baseline rather than the runner's — see
   DESIGN.md.
-- **`win-x64` (tts-only, planned)** — Piper + onnxruntime + espeak-ng only (pure
-  CPU, no whisper/llama/Metal). Feeds the plugin's hybrid mode (cloud STT/LM +
-  local German Piper voice) on Windows (#73/#74). The x86_64-macOS variant was
-  dropped — GitHub retired the Intel CI runners (see DESIGN.md); Intel Macs keep
-  cloud TTS, no regression.
+- **`win-x64` (full)** — the same, with **Vulkan** as the GPU backend (never
+  CUDA: no redist DLLs, `vulkan-1.dll` comes from the graphics driver). Its
+  static archives are built with the **static MSVC runtime (`/MT`)**, so the
+  consumer must set `-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` — see DESIGN.md.
+  The x86_64-macOS variant was dropped — GitHub retired the Intel CI runners
+  (see DESIGN.md); Intel Macs keep cloud TTS, no regression.
 
 **This repo must stay public.** The plugins ship espeak-ng (GPL-3.0-or-later)
 as a binary, and their `THIRD_PARTY.md` points here for the corresponding
@@ -47,13 +48,14 @@ writes into `manifest.txt` — the consumer builds its download URL from exactly
 these strings. Linux additionally needs `patchelf` installed (it rewrites
 `libpiper.so`'s RUNPATH during staging and is a hard `find_program` requirement).
 
-The Windows Piper-only release bundle (plugin #73/#74) is built in CI on
-`windows-latest` with the same `XPWELLYS_LIBS_TTS_ONLY` option.
+The Windows bundle has no local path — it is built in CI only (MSVC on
+`windows-latest`, with the Vulkan SDK installed there for `glslc` and the SPIR-V
+headers).
 
-CI (`.github/workflows/release.yml`) builds the arm64 full bundle on `macos-15`
-and the linux-x64 full bundle on `ubuntu-22.04`, link-smoke-tests each exactly
-as the plugin will consume it, and on a `v*` tag publishes the tarballs as a
-GitHub release.
+CI (`.github/workflows/release.yml`) builds all three full bundles — `macos-15`
+(arm64/Metal), `ubuntu-22.04` (CPU), `windows-latest` (CPU + Vulkan) —
+link-smoke-tests each exactly as the plugin will consume it, and on a `v*` tag
+publishes the tarballs as a GitHub release.
 
 ## Cut a release
 

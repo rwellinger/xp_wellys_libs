@@ -1,12 +1,15 @@
 # xp_wellys_libs.cmake — shipped inside the bundle, included by the plugin's
 # CMakeLists to consume the prebuilt local-inference libraries.
 #
-# Three bundle kinds ship from this repo:
-#   * full     (arm64-macos): whisper + llama + ggml/Metal + Piper. Defines
-#                both xp_wellys_libs::inference AND xp_wellys_libs::piper.
-#   * full     (linux-x64):   same, but plain-CPU ggml (no Metal/Accelerate).
-#   * tts-only (win-x64, planned #73/#74): Piper + onnxruntime only. Defines
-#                xp_wellys_libs::piper. No whisper/llama/Metal.
+# Three bundles ship from this repo, all of them "full":
+#   * arm64-macos: whisper + llama + ggml/Metal + Piper. Defines both
+#                  xp_wellys_libs::inference AND xp_wellys_libs::piper.
+#   * linux-x64:   same, but plain-CPU ggml (no Metal/Accelerate).
+#   * win-x64:     same, with ggml/Vulkan as the GPU backend. NOTE: its static
+#                  archives are built with the STATIC MSVC runtime (/MT) — see
+#                  the guard in the WIN32 branch below.
+# A tts-only bundle (Piper + onnxruntime, no whisper/llama) is still buildable
+# via XPWELLYS_LIBS_TTS_ONLY, but no longer released for any platform.
 #
 # Usage (plugin repo):
 #   set(XP_WELLYS_LIBS_ROOT "${CMAKE_SOURCE_DIR}/vendor/prebuilt/xp_wellys_libs")
@@ -56,13 +59,27 @@ endif()
 if(WIN32)
     set(_xwl_piper_link "${_xwl_lib}/piper.lib")
     set(_xwl_onnx_link  "${_xwl_lib}/onnxruntime.lib")
+    set(_xwl_ar_pre "")
+    set(_xwl_ar_suf ".lib")
 elseif(APPLE)
     set(_xwl_piper_link "${_xwl_lib}/libpiper.dylib")
     set(_xwl_onnx_link  "${_xwl_lib}/libonnxruntime.1.22.0.dylib")
+    set(_xwl_ar_pre "lib")
+    set(_xwl_ar_suf ".a")
 else()
     set(_xwl_piper_link "${_xwl_lib}/libpiper.so")
     set(_xwl_onnx_link  "${_xwl_lib}/libonnxruntime.so.1.22.0")
+    set(_xwl_ar_pre "lib")
+    set(_xwl_ar_suf ".a")
 endif()
+
+# One static-archive path in the target platform's naming scheme: libwhisper.a
+# on macOS/Linux, whisper.lib under MSVC. The archive NAMES differ per platform;
+# the questions asked about them below ("is whisper in this bundle?", "did it
+# come with a GPU backend?") do not.
+function(_xwl_archive name out)
+    set(${out} "${_xwl_lib}/${_xwl_ar_pre}${name}${_xwl_ar_suf}" PARENT_SCOPE)
+endfunction()
 
 if(NOT EXISTS "${_xwl_piper_link}")
     message(FATAL_ERROR
@@ -86,7 +103,8 @@ target_link_libraries(xp_wellys_libs::piper INTERFACE
 # ── Full inference target — only in the full bundles ──────────────────────────
 # Static archives in dependency order, then Piper + onnxruntime, then the
 # platform's system dependencies. Absent from tts-only bundles (no libwhisper.a).
-if(EXISTS "${_xwl_lib}/libwhisper.a")
+_xwl_archive(whisper _xwl_whisper)
+if(EXISTS "${_xwl_whisper}")
     add_library(xp_wellys_libs::inference INTERFACE IMPORTED)
     target_include_directories(xp_wellys_libs::inference INTERFACE
         "${_xwl_inc}"
@@ -94,23 +112,56 @@ if(EXISTS "${_xwl_lib}/libwhisper.a")
         "${_xwl_inc}/common"
     )
 
-    # ggml-metal only exists in a Metal-enabled (macOS) bundle. Decide on the
-    # bundle's CONTENT rather than on if(APPLE) -- the archive list should
-    # describe what is actually there.
-    set(_xwl_static
-        "${_xwl_lib}/libwhisper.a"
-        "${_xwl_lib}/libllama-common.a"
-        "${_xwl_lib}/libllama-common-base.a"
-        "${_xwl_lib}/libllama.a")
-    if(EXISTS "${_xwl_lib}/libggml-metal.a")
-        list(APPEND _xwl_static "${_xwl_lib}/libggml-metal.a")
-    endif()
-    list(APPEND _xwl_static
-        "${_xwl_lib}/libggml-cpu.a"
-        "${_xwl_lib}/libggml-base.a"
-        "${_xwl_lib}/libggml.a")
+    set(_xwl_static "")
+    foreach(_a whisper llama-common llama-common-base llama)
+        _xwl_archive(${_a} _xwl_p)
+        list(APPEND _xwl_static "${_xwl_p}")
+    endforeach()
+    # GPU backends: ggml-metal on macOS, ggml-vulkan on Windows. Decide on the
+    # bundle's CONTENT rather than on if(APPLE)/if(WIN32) -- the archive list
+    # should describe what is actually there.
+    foreach(_a ggml-metal ggml-vulkan)
+        _xwl_archive(${_a} _xwl_p)
+        if(EXISTS "${_xwl_p}")
+            list(APPEND _xwl_static "${_xwl_p}")
+        endif()
+    endforeach()
+    foreach(_a ggml-cpu ggml-base ggml)
+        _xwl_archive(${_a} _xwl_p)
+        list(APPEND _xwl_static "${_xwl_p}")
+    endforeach()
 
-    if(APPLE)
+    if(WIN32)
+        # These archives are built with the STATIC MSVC runtime (/MT). They link
+        # into the SAME module as the plugin, so a /MD consumer means LNK2005 --
+        # or two CRT heaps in one module, which surfaces as a crash on the first
+        # free() across the boundary. Fail at configure time instead.
+        if(NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "^MultiThreaded(Debug)?$")
+            message(FATAL_ERROR
+                "xp_wellys_libs (win-x64) is built against the STATIC MSVC "
+                "runtime. Set -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded in the "
+                "consuming build (current value: '${CMAKE_MSVC_RUNTIME_LIBRARY}').")
+        endif()
+        # link.exe resolves cross-references between .lib files regardless of
+        # order, so there is no --start-group equivalent to reach for and no
+        # ordering risk. The list stays in dependency order for readability.
+        #
+        # vulkan-1.lib is the Vulkan LOADER import lib and lives IN THE BUNDLE:
+        # ggml-vulkan needs only vkGetInstanceProcAddr at link time (everything
+        # else goes through the dynamic vulkan.hpp dispatcher), so shipping it
+        # means the consuming build needs no Vulkan SDK. The matching
+        # vulkan-1.dll comes from the graphics driver -- X-Plane 12 renders
+        # through Vulkan on Windows, so it is present on every target system.
+        target_link_libraries(xp_wellys_libs::inference INTERFACE
+            ${_xwl_static}
+            "${_xwl_piper_link}"
+            "${_xwl_onnx_link}"
+        )
+        if(EXISTS "${_xwl_lib}/vulkan-1.lib")
+            target_link_libraries(xp_wellys_libs::inference INTERFACE
+                "${_xwl_lib}/vulkan-1.lib")
+        endif()
+    elseif(APPLE)
         # ld64 re-scans archives, so a single dependency-ordered pass links.
         target_link_libraries(xp_wellys_libs::inference INTERFACE
             ${_xwl_static}

@@ -196,16 +196,28 @@ jobs:
           files: xp_wellys_libs-linux-x64-*.tar.gz
           generate_release_notes: true
 
-  # Windows x64 Piper-only (tts-only) bundle for the plugin's hybrid mode on
-  # Windows (plugin #73/#74). MSVC on windows-latest; libcurl-free — Piper +
-  # onnxruntime + espeak-ng only. No make (the Makefile is macOS-shaped); cmake
-  # is driven directly. Windows carries onnxruntime.dll (not DLL-free — a
-  # deliberate tradeoff for the accent-free German voice).
+  # Windows x64 FULL bundle: whisper + llama + ggml (CPU + Vulkan) + Piper.
+  # The GPU backend is Vulkan, NOT CUDA — no redist DLLs in the artifact,
+  # vulkan-1.dll comes from the graphics driver (X-Plane 12 renders through
+  # Vulkan on Windows anyway), and it covers AMD/Intel as a bonus. MSVC on
+  # windows-latest; no make (the Makefile is macOS-shaped), cmake is driven
+  # directly. Windows carries onnxruntime.dll (not DLL-free — a deliberate
+  # tradeoff for the accent-free German voice).
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 60
+    # The 136 .comp shaders expand into ~2000 SPIR-V variants via glslc and 136
+    # generated .cpp with the SPIR-V embedded, on top of ggml-vulkan.cpp itself,
+    # whisper/llama/common and Piper/espeak. That is 45-80 min cold on a 4-core
+    # runner — 60 was sized for the Piper-only build.
+    timeout-minutes: 150
     permissions:
       contents: write
+    env:
+      # Pinned to the version upstream llama.cpp runs its own windows-vulkan job
+      # against: known-good with this submodule pin, including the SPIRV-Headers
+      # CMake config that ggml/src/ggml-vulkan/CMakeLists.txt requires via
+      # find_package(... CONFIG REQUIRED).
+      VULKAN_VERSION: 1.4.313.2
     steps:
       - uses: actions/checkout@v5
         with:
@@ -224,7 +236,21 @@ jobs:
         # Puts cl.exe + the Windows SDK on PATH for CMake's Ninja generator.
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Configure + build bundle (Ninja + MSVC, Piper-only)
+      - name: Install Vulkan SDK (glslc + Vulkan/SPIRV headers + vulkan-1.lib)
+        shell: pwsh
+        # The LunarG installer directly, rather than a third-party action: this
+        # is what upstream llama.cpp does in its own CI, it pins cleanly, and it
+        # keeps one more action out of the supply chain. BUILD-time only — the
+        # sole thing that reaches the artifact is the tiny vulkan-1 import lib.
+        run: |
+          $ErrorActionPreference = "Stop"
+          curl.exe -o "$env:RUNNER_TEMP/VulkanSDK-Installer.exe" -L `
+            "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+
+      - name: Configure + build bundle (Ninja + MSVC, full + Vulkan)
         shell: pwsh
         # Ninja (single-config) — NOT the Visual Studio multi-config generator:
         # libpiper hardcodes espeak/ucd static-lib paths WITHOUT a per-config
@@ -232,29 +258,56 @@ jobs:
         # generator. Same generator the plugin's Windows build uses.
         run: |
           cmake -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release `
-            -DXPWELLYS_LIBS_TTS_ONLY=ON -Wno-dev
+            -DXPWELLYS_LIBS_TTS_ONLY=OFF -DXPWELLYS_LIBS_VULKAN=ON -Wno-dev
           cmake --build build-win --target bundle
+
+      - name: Assert the bundle is portable
+        shell: pwsh
+        # Both failure modes are invisible on the runner and only bite in the
+        # plugin's link (or, worse, at runtime in the user's cockpit):
+        #  1) CRT — a /MD object inside these archives is LNK2005 for the plugin,
+        #     or two CRT heaps in one module if it somehow links.
+        #  2) Vulkan — ggml-vulkan.lib must actually be in the bundle, and the
+        #     loader import lib alongside it.
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($lib in @("whisper.lib","llama.lib","ggml.lib","ggml-base.lib","ggml-cpu.lib","ggml-vulkan.lib")) {
+            $p = "build-win/bundle/lib/$lib"
+            if (-not (Test-Path $p)) { throw "$lib missing from the bundle" }
+            $d = dumpbin /directives $p | Out-String
+            if ($d -match 'DEFAULTLIB:\s*"?MSVCRT')    { throw "$lib was built against the DYNAMIC CRT (/MD)" }
+            if ($d -notmatch 'DEFAULTLIB:\s*"?LIBCMT') { throw "$lib carries no LIBCMT directive (/MT expected)" }
+          }
+          if (-not (Test-Path build-win/bundle/lib/vulkan-1.lib)) {
+            throw "vulkan-1.lib was not staged — the consuming build would need a Vulkan SDK"
+          }
+          Write-Host "--- bundle lib/ ---"
+          Get-ChildItem build-win/bundle/lib | Format-Table Name,Length
 
       - name: Smoke-test — link the bundle exactly as the plugin will
         shell: pwsh
         # Link-only, matching the smoke's stated purpose ("proves the archives
-        # link, not that inference runs"). Building link_test against piper.lib
-        # proves the import lib carries the Piper C API — the one real risk of
-        # the prebuilt approach. The RUNTIME load (piper.dll + onnxruntime.dll)
-        # is validated by the plugin inside X-Plane (#74); onnxruntime's DLL
-        # init fails in this minimal headless CI process (0xC0000142), which is
-        # environmental, not a bundle defect.
+        # link, not that inference runs"). Now that win-x64 is a full bundle
+        # this covers the whisper/llama/ggml archive set and the Vulkan backend
+        # symbols too — the one real risk of the prebuilt approach. The RUNTIME
+        # side is validated by the plugin inside X-Plane (#74): this runner has
+        # no Vulkan ICD, and onnxruntime's DLL init fails in a minimal headless
+        # CI process (0xC0000142). Both environmental, not bundle defects.
+        #
+        # MultiThreaded, because that is what the plugin uses and what the
+        # bundle's own CRT guard in xp_wellys_libs.cmake demands.
         run: |
           $ErrorActionPreference = "Stop"
-          Write-Host "--- bundle lib/ ---"
-          Get-ChildItem build-win/bundle/lib | Format-Table Name,Length
           cmake -S smoke -B build-win/smoke -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
             -DXP_WELLYS_LIBS_ROOT="$PWD/build-win/bundle" -Wno-dev
           cmake --build build-win/smoke
-          if (-not (Test-Path build-win/smoke/link_test.exe)) {
-            throw "link_test.exe was not produced — piper.lib link failed"
+          foreach ($exe in @("link_test.exe","piper_link_test.exe")) {
+            if (-not (Test-Path "build-win/smoke/$exe")) {
+              throw "$exe was not produced — the bundle failed to link"
+            }
+            Write-Host "$exe linked OK (link-only smoke on Windows)"
           }
-          Write-Host "link_test.exe linked OK against piper.lib (link-only smoke on Windows)"
 
       - name: Package tarball
         shell: pwsh
