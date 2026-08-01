@@ -24,6 +24,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(XPWELLYS_LIBS_TTS_ONLY
     "Build a Piper-only bundle (no whisper/llama/ggml/Metal)" OFF)
 
+# ── GPU backend off Apple ────────────────────────────────────────────────────
+# Vulkan, deliberately NOT CUDA. A redistributable bundle must not drag CUDA's
+# redist DLLs behind it (ggml-cuda ~50-160 MB plus cuBLAS/cuBLASLt in the
+# hundreds of MB) — that is unacceptable for a plugin shipped through the
+# SkunkCrafts updater. Vulkan needs NO extra runtime DLL: vulkan-1.dll comes
+# with the graphics driver, and X-Plane 12 renders through Vulkan on Windows
+# anyway, so it is present on every target system. It also covers AMD/Intel.
+# Linux stays CPU-only on purpose: the ICD/driver zoo there is wide and the
+# payoff (small whisper/LM models) is narrow.
+if(WIN32)
+    set(_xwl_vulkan_default ON)
+else()
+    set(_xwl_vulkan_default OFF)
+endif()
+option(XPWELLYS_LIBS_VULKAN
+    "Build ggml with the Vulkan backend (Windows default)" ${_xwl_vulkan_default})
+
 # arm64 + macOS 13.3, matching the plugin's local-inference slice exactly
 # (onnxruntime 1.22.0's prebuilt dylib is built against the 13.3 SDK).
 if(APPLE)
@@ -35,8 +52,12 @@ endif()
 set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
 
 # ccache if available — big win on same-pin re-runs.
+# Not under MSVC: cl.exe is not a ccache-compatible launcher, and a ccache that
+# merely happens to sit on the runner would break the compile rather than speed
+# it up. Upstream llama.cpp keeps it off in its own Windows jobs for the same
+# reason (it needs an LLVM toolchain).
 find_program(CCACHE_PROGRAM ccache)
-if(CCACHE_PROGRAM)
+if(CCACHE_PROGRAM AND NOT MSVC)
     set(CMAKE_C_COMPILER_LAUNCHER   "${CCACHE_PROGRAM}")
     set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
     message(STATUS "ccache enabled: ${CCACHE_PROGRAM}")
@@ -78,6 +99,31 @@ if(NOT XPWELLYS_LIBS_TTS_ONLY)
         set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     endif()
 
+    # ── Vulkan GPU backend (see XPWELLYS_LIBS_VULKAN above) ──────────────────
+    # With BUILD_SHARED_LIBS=OFF and GGML_BACKEND_DL=OFF, ggml_add_backend()
+    # makes ggml-vulkan a plain static lib hanging PUBLIC off ggml, and
+    # ggml-backend-reg.cpp calls ggml_backend_vk_reg() directly — so the linker
+    # pulls it in without any whole-archive trickery. The .comp shaders are
+    # compiled to SPIR-V at build time and embedded as arrays in generated .cpp:
+    # there are NO .spv files to ship at runtime.
+    set(GGML_VULKAN ${XPWELLYS_LIBS_VULKAN} CACHE BOOL "" FORCE)
+
+    # ── MSVC runtime: STATIC CRT for the archives ────────────────────────────
+    # The consumer builds with -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded (its
+    # curl comes from vcpkg's x64-windows-static). These static archives land in
+    # the SAME module as the plugin, so mixing /MD and /MT means LNK2005 — or,
+    # worse, it links and then corrupts the heap on a free() across the boundary.
+    #
+    # CMAKE_POLICY_DEFAULT_CMP0091 is not optional here: whisper.cpp's
+    # CMakeLists.txt opens with cmake_minimum_required(VERSION 3.5), which resets
+    # policies in that subdirectory. CMP0091 would be unset (OLD) there and
+    # CMAKE_MSVC_RUNTIME_LIBRARY silently ignored — for whisper.lib alone, which
+    # is exactly the mismatch that is hardest to spot.
+    if(MSVC)
+        set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+
     # ── llama.cpp (provides ggml, llama, llama-common) ───────────────────────
     set(LLAMA_BUILD_COMMON   ON  CACHE BOOL "" FORCE)
     set(LLAMA_BUILD_TOOLS    OFF CACHE BOOL "" FORCE)
@@ -96,6 +142,23 @@ if(NOT XPWELLYS_LIBS_TTS_ONLY)
     set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
     set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
     add_subdirectory(${TP}/whisper.cpp ${CMAKE_BINARY_DIR}/whisper.cpp EXCLUDE_FROM_ALL)
+
+    # whisper.cpp sets this MSVC workaround only in its own if(NOT TARGET ggml)
+    # branch — here ggml already comes from llama.cpp, so that branch never runs
+    # and the define would be missing. Restate it.
+    if(MSVC AND TARGET ggml-base)
+        target_compile_definitions(ggml-base PRIVATE
+            _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+    endif()
+
+    # Back to the dynamic CRT for Piper. piper.dll links espeak-ng.lib, which
+    # libpiper builds through an ExternalProject with fixed CMAKE_ARGS that do
+    # NOT forward CMAKE_MSVC_RUNTIME_LIBRARY — so espeak-ng is /MD no matter what
+    # we set here, and a /MT piper.dll would fail to link against it. Across the
+    # DLL boundary the CRT choice does not matter; within one module it does.
+    if(MSVC)
+        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+    endif()
 endif()
 
 # ── Piper (provides piper; pulls espeak-ng static + onnxruntime prebuilt) ────
@@ -165,7 +228,7 @@ set(BUNDLE "${CMAKE_BINARY_DIR}/bundle")
 # if(TARGET), so whichever set exists is staged.
 set(_bundle_targets
     whisper llama llama-common llama-common-base common
-    ggml ggml-base ggml-cpu ggml-metal ggml-blas
+    ggml ggml-base ggml-cpu ggml-metal ggml-blas ggml-vulkan
     piper)
 
 add_custom_target(bundle
@@ -194,6 +257,20 @@ if(WIN32 AND TARGET piper)
     add_custom_command(TARGET bundle POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_LINKER_FILE:piper>" "${BUNDLE}/lib/"
+        VERBATIM)
+endif()
+
+# vulkan-1.lib: ggml-vulkan.cpp drives everything through the dynamic vulkan.hpp
+# dispatcher, so exactly ONE symbol is left at link time (vkGetInstanceProcAddr).
+# Shipping that tiny import lib means the CONSUMER's CI needs no Vulkan SDK at
+# all. The matching vulkan-1.dll is NOT shipped — it comes from the graphics
+# driver, and X-Plane 12 renders through Vulkan on Windows anyway.
+if(WIN32 AND TARGET ggml-vulkan)
+    find_package(Vulkan REQUIRED)
+    add_custom_command(TARGET bundle POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${Vulkan_LIBRARY}" "${BUNDLE}/lib/vulkan-1.lib"
+        COMMENT "Copying vulkan-1 import lib into bundle"
         VERBATIM)
 endif()
 

@@ -24,6 +24,11 @@ include("${XP_WELLYS_LIBS_ROOT}/xp_wellys_libs.cmake")
 if(TARGET xp_wellys_libs::inference)
     add_executable(link_test link_test.cpp)
     target_link_libraries(link_test PRIVATE xp_wellys_libs::inference)
+    # The plugin links ::piper on its own too (the hybrid TTS override is
+    # available in every mode), so a full bundle must prove BOTH targets link,
+    # not just the inference one.
+    add_executable(piper_link_test piper_link_test.cpp)
+    target_link_libraries(piper_link_test PRIVATE xp_wellys_libs::piper)
 else()
     add_executable(link_test piper_link_test.cpp)
     target_link_libraries(link_test PRIVATE xp_wellys_libs::piper)
