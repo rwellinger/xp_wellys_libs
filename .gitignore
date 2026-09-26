@@ -4,3 +4,4 @@ download/
 *.tar.gz
 .DS_Store
 .cache/
+.idea/
