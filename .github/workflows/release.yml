@@ -12,6 +12,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
+env:
+  # Run every JavaScript action on Node 24. All pinned actions ship node24
+  # already except ilammy/msvc-dev-cmd (latest v1.13.0 is still node20).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ${{ matrix.runner }}
@@ -38,7 +43,7 @@ jobs:
           # + xp_wellys_libs::piper target stay — the Windows Piper-only bundle
           # (plugin #73/#74) reuses exactly that machinery on windows-latest.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -49,7 +54,7 @@ jobs:
         run: brew install ninja ccache
 
       - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2.23
+        uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: ${{ runner.os }}-${{ matrix.arch }}-libs
           max-size: 2500M
@@ -82,7 +87,7 @@ jobs:
         run: cat ${{ matrix.smoke_root }}/manifest.txt
 
       - name: Upload build artifact (every run)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}-*.tar.gz
@@ -90,7 +95,7 @@ jobs:
 
       - name: Create release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ matrix.artifact }}-*.tar.gz
           generate_release_notes: true
@@ -112,7 +117,7 @@ jobs:
     permissions:
       contents: write # create the release on tags
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -127,7 +132,7 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build ccache patchelf
 
       - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2.23
+        uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: Linux-x64-libs
           max-size: 2500M
@@ -183,7 +188,7 @@ jobs:
         run: cat build/bundle/manifest.txt
 
       - name: Upload build artifact (every run)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xp_wellys_libs-linux-x64
           path: xp_wellys_libs-linux-x64-*.tar.gz
@@ -191,7 +196,7 @@ jobs:
 
       - name: Create release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: xp_wellys_libs-linux-x64-*.tar.gz
           generate_release_notes: true
@@ -219,7 +224,7 @@ jobs:
       # find_package(... CONFIG REQUIRED).
       VULKAN_VERSION: 1.4.313.2
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -351,7 +356,7 @@ jobs:
           Get-ChildItem runtime-test | Format-Table Name,Length
 
       - name: Upload the runtime test (every run)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: piper-runtime-test-win-x64
           path: runtime-test
@@ -370,7 +375,7 @@ jobs:
         run: Get-Content build-win/bundle/manifest.txt
 
       - name: Upload build artifact (every run)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xp_wellys_libs-win-x64
           path: xp_wellys_libs-win-x64-*.tar.gz
@@ -378,7 +383,7 @@ jobs:
 
       - name: Create release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: xp_wellys_libs-win-x64-*.tar.gz
           generate_release_notes: true
