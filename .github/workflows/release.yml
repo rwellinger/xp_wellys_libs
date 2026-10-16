@@ -209,7 +209,10 @@ jobs:
   # directly. Windows carries onnxruntime.dll (not DLL-free — a deliberate
   # tradeoff for the accent-free German voice).
   build-windows:
-    runs-on: windows-latest
+    # Pinned (not windows-latest) so neither the OS nor the MSVC toolchain
+    # moves under us: the CRT/ABI assertions below are only as stable as the
+    # compiler that produced the archives. Last known-good image.
+    runs-on: windows-2025-vs2026
     # Measured ~11 min cold for the full bundle (the 136 .comp shaders expand
     # into SPIR-V arrays compiled into ggml-vulkan.lib, which is the bulk of it).
     # 45 leaves a 4x margin for a slow runner without letting a hung job sit for
