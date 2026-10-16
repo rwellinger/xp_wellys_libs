@@ -41,7 +41,7 @@ jobs:
           # espeak-ng submodule. Intel Macs are a shrinking niche with no
           # regression (they keep cloud TTS). The XPWELLYS_LIBS_TTS_ONLY option
           # + xp_wellys_libs::piper target stay — the Windows Piper-only bundle
-          # (plugin #73/#74) reuses exactly that machinery on windows-latest.
+          # (plugin #73/#74) reuses exactly that machinery on windows-2025-vs2026.
     steps:
       - uses: actions/checkout@v7
         with:
@@ -205,7 +205,7 @@ jobs:
   # The GPU backend is Vulkan, NOT CUDA — no redist DLLs in the artifact,
   # vulkan-1.dll comes from the graphics driver (X-Plane 12 renders through
   # Vulkan on Windows anyway), and it covers AMD/Intel as a bonus. MSVC on
-  # windows-latest; no make (the Makefile is macOS-shaped), cmake is driven
+  # windows-2025-vs2026; no make (the Makefile is macOS-shaped), cmake is driven
   # directly. Windows carries onnxruntime.dll (not DLL-free — a deliberate
   # tradeoff for the accent-free German voice).
   build-windows:
